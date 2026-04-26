@@ -1,6 +1,6 @@
 """End-to-end tests for the public API.
 
-These exercise find_citations, find_citations_batch, find_citations_by_shoulder
+These exercise find_citations, find_citations_batch, find_citations_by_prefix
 by monkey-patching the REGISTRY with a fake adapter, so no HTTP happens.
 """
 
@@ -15,7 +15,7 @@ from dataset_citation_finder import (
     collapse_sources,
     find_citations,
     find_citations_batch,
-    find_citations_by_shoulder,
+    find_citations_by_prefix,
 )
 from dataset_citation_finder.adapters import base as base_module
 from dataset_citation_finder.adapters import REGISTRY
@@ -66,8 +66,8 @@ class FakeOpenAlexLike(base_module.SourceAdapter):
         )
 
 
-class FakeShoulderEnumerator:
-    """Stand-in for the real ShoulderEnumerator — returns a fixed list."""
+class FakePrefixEnumerator:
+    """Stand-in for the real PrefixEnumerator — returns a fixed list."""
 
     def __init__(self, *args, **kwargs):
         pass
@@ -96,10 +96,10 @@ def fake_registry(monkeypatch):
 
 @pytest.fixture
 def fake_enumerator(monkeypatch):
-    """Replace the real ShoulderEnumerator with a fixture-backed one."""
+    """Replace the real PrefixEnumerator with a fixture-backed one."""
     monkeypatch.setattr(
-        "dataset_citation_finder.api.ShoulderEnumerator",
-        FakeShoulderEnumerator,
+        "dataset_citation_finder.api.PrefixEnumerator",
+        FakePrefixEnumerator,
     )
 
 
@@ -153,10 +153,10 @@ class TestFindCitationsBatch:
             find_citations_batch(["not", "also-not"])
 
 
-class TestFindCitationsByShoulder:
+class TestFindCitationsByPrefix:
 
     def test_prefix_capable_uses_prefix_query(self, fake_registry, fake_enumerator):
-        df = find_citations_by_shoulder("10.6073")
+        df = find_citations_by_prefix("10.6073")
         # DataCite returns 2 rows via query_prefix;
         # OpenAlex + noops (3 of them, each zero) run query_batch over 2 enumerated DOIs.
         # OpenAlex returns 1 row per enumerated DOI = 2 rows.

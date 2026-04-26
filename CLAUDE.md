@@ -4,7 +4,7 @@ Project context for Claude Code sessions on **dataset-citation-finder**.
 
 ## What this project is
 
-A Python library for discovering academic papers that cite a given dataset, by querying multiple scholarly databases and merging results with provenance preserved. Repository-agnostic — accepts a single DOI, an arbitrary list, or a shoulder prefix (e.g., `10.6073` to sweep the entire Environmental Data Initiative catalog).
+A Python library for discovering academic papers that cite a given dataset, by querying multiple scholarly databases and merging results with provenance preserved. Repository-agnostic — accepts a single DOI, an arbitrary list, or a DOI prefix (e.g., `10.6073` to sweep the entire Environmental Data Initiative catalog).
 
 The canonical source of truth for design decisions is **`docs/dataset_citation_finder_design.md`** — read it first.
 
@@ -18,14 +18,14 @@ Three layers: **source adapters → merge/dedup engine → output formatters.** 
 - `utils.normalize_doi` — canonical DOI form
 - `schema.LongRow` / `schema.GroupedRecord` — pydantic models with DOI validation
 - `http_client` — polite-pool User-Agent, exponential backoff with jitter, `Retry-After` respect
-- `enumeration.ShoulderEnumerator` — DataCite-backed DOI enumeration with disk cache
+- `enumeration.PrefixEnumerator` — DataCite-backed DOI enumeration with disk cache
 - `engine` — adapter orchestration with per-adapter exception isolation
 - `collapse.collapse_sources` — long-format → deduplicated view
 - `adapters.base.SourceAdapter` — base ABC + default `query_batch` fanout
 - `adapters.datacite_events.DataCiteEventsAdapter` — full implementation, both per-DOI and prefix paths
 - `adapters.opencitations.OpenCitationsAdapter` — full per-DOI implementation
 - `adapters.openalex.OpenAlexAdapter` — full implementation with DOI → work-ID resolution and cursor pagination
-- Public API: `find_citations`, `find_citations_batch`, `find_citations_by_shoulder`, `collapse_sources`
+- Public API: `find_citations`, `find_citations_batch`, `find_citations_by_prefix`, `collapse_sources`
 
 **Stubs that raise `NotImplementedError`:**
 - `adapters.stubs.SemanticScholarAdapter`
@@ -36,7 +36,7 @@ Three layers: **source adapters → merge/dedup engine → output formatters.** 
 These are in the default source list, so a default `find_citations(doi)` call logs two non-fatal `NotImplementedError` warnings (Semantic Scholar, CrossRef) per DOI and continues with the three working adapters. Pass an explicit `sources=[...]` list to silence.
 
 **Not yet built:**
-- SQLite checkpoint/resume store for long-running shoulder sweeps (design §6, §15 step 9)
+- SQLite checkpoint/resume store for long-running prefix sweeps (design §6, §15 step 9)
 - BibTeX file-output formatter (design §4.3)
 - CSV file-output formatter as a first-class output (the long-format DataFrame supports `.to_csv` already)
 - Live integration tests against real APIs

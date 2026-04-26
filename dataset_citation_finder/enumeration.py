@@ -1,6 +1,6 @@
-"""ShoulderEnumerator: fetch all DOIs under a given prefix from DataCite.
+"""PrefixEnumerator: fetch all DOIs under a given prefix from DataCite.
 
-Used by per-DOI adapters during a shoulder sweep to obtain the working DOI
+Used by per-DOI adapters during a prefix sweep to obtain the working DOI
 list. Results are cached on disk (JSON) keyed on the prefix.
 """
 
@@ -19,8 +19,8 @@ DOIS_URL = "https://api.datacite.org/dois"
 DEFAULT_TTL_SECONDS = 24 * 60 * 60  # 24 h
 
 
-class ShoulderEnumerator:
-    """Enumerate DOIs under a DataCite shoulder prefix, with disk caching."""
+class PrefixEnumerator:
+    """Enumerate DOIs under a DataCite DOI prefix, with disk caching."""
 
     def __init__(
         self,
@@ -41,7 +41,7 @@ class ShoulderEnumerator:
         """Return the full list of DOIs under `prefix`."""
         cached = self._read_cache(prefix)
         if cached is not None:
-            log.debug("shoulder enumerator: cache hit for %s (%d DOIs)", prefix, len(cached))
+            log.debug("prefix enumerator: cache hit for %s (%d DOIs)", prefix, len(cached))
             return cached
 
         dois: list[str] = []
@@ -54,7 +54,7 @@ class ShoulderEnumerator:
             }
             resp = await request_with_retry(self._client, "GET", DOIS_URL, params=params)
             if resp.status_code >= 400:
-                log.warning("shoulder enumerator: HTTP %d for prefix=%s", resp.status_code, prefix)
+                log.warning("prefix enumerator: HTTP %d for prefix=%s", resp.status_code, prefix)
                 break
             body = resp.json()
             for item in body.get("data", []):
@@ -72,7 +72,7 @@ class ShoulderEnumerator:
         if self._cache_dir is None:
             return None
         safe = prefix.replace("/", "_")
-        return self._cache_dir / f"shoulder_{safe}.json"
+        return self._cache_dir / f"prefix_{safe}.json"
 
     def _read_cache(self, prefix: str) -> list[str] | None:
         path = self._cache_path(prefix)
@@ -81,7 +81,7 @@ class ShoulderEnumerator:
         try:
             payload = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError) as e:
-            log.warning("shoulder cache: failed to read %s: %s", path, e)
+            log.warning("prefix cache: failed to read %s: %s", path, e)
             return None
         if time.time() - payload.get("ts", 0) > self._ttl:
             return None
@@ -94,7 +94,7 @@ class ShoulderEnumerator:
         try:
             path.write_text(json.dumps({"ts": time.time(), "dois": dois}))
         except OSError as e:
-            log.warning("shoulder cache: failed to write %s: %s", path, e)
+            log.warning("prefix cache: failed to write %s: %s", path, e)
 
     @staticmethod
     def _next_cursor(body: dict) -> str | None:

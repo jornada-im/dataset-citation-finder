@@ -4,13 +4,13 @@
 
 ## 1. Overview
 
-The **Dataset Citation Finder** is a Python library for discovering academic papers that cite a given dataset. It accepts a full DOI, a list of DOIs, or a DOI shoulder prefix (e.g., `10.6073/*` to sweep an entire dataset family such as the Environmental Data Initiative's catalog); queries multiple scholarly and citation-graph services; and returns deduplicated results with per-source provenance preserved.
+The **Dataset Citation Finder** is a Python library for discovering academic papers that cite a given dataset. It accepts a full DOI, a list of DOIs, or a DOI prefix (e.g., `10.6073/*` to sweep an entire dataset family such as the Environmental Data Initiative's catalog); queries multiple scholarly and citation-graph services; and returns deduplicated results with per-source provenance preserved.
 
 The tool is designed as a Python library first — not a CLI or web service — and is repository-agnostic: dataset DOIs from any DataCite- or CrossRef-registered repository are valid input.
 
 ## 2. Goals
 
-- Accept input as (a) a single dataset DOI, (b) an arbitrary iterable of DOIs, or (c) a DOI shoulder prefix.
+- Accept input as (a) a single dataset DOI, (b) an arbitrary iterable of DOIs, or (c) a DOI prefix.
 - Query multiple citation sources (see §4) and merge results.
 - Preserve per-source provenance on every record — provenance is a first-class concern, not an afterthought.
 - Output structured data in JSON, CSV, BibTeX, and a long-format provenance-preserving table.
@@ -74,17 +74,17 @@ A single `normalize_doi()` in `utils` is called by every adapter before emitting
 
 Normalization at the adapter boundary ensures dedup keys work regardless of upstream formatting.
 
-### 5.2 Shoulder Expansion
+### 5.2 Prefix Expansion
 
 Two query patterns are supported across adapters:
 
-- **Prefix-capable sources** (DataCite Events): query by `obj-id.prefix=<shoulder>` directly; no DOI enumeration needed. This is the most efficient path for repository-wide sweeps.
+- **Prefix-capable sources** (DataCite Events): query by `obj-id.prefix=<prefix>` directly; no DOI enumeration needed. This is the most efficient path for repository-wide sweeps.
 - **Per-DOI sources** (everything else): require a concrete DOI list.
 
-A shared `ShoulderEnumerator` component fetches the full DOI list from DataCite:
+A shared `PrefixEnumerator` component fetches the full DOI list from DataCite:
 
 ```
-GET https://api.datacite.org/dois?query=prefix:<shoulder>
+GET https://api.datacite.org/dois?query=prefix:<prefix>
                                  &page[size]=1000
                                  &page[cursor]=...
 ```
@@ -99,7 +99,7 @@ Results are cached on disk (default TTL 24 h) since repository catalogs change s
 from dataset_citation_finder import (
     find_citations,             # single DOI
     find_citations_batch,       # iterable of DOIs
-    find_citations_by_shoulder, # all DOIs under a shoulder prefix
+    find_citations_by_prefix, # all DOIs under a DOI prefix
     collapse_sources,           # long-format -> deduplicated
 )
 ```
@@ -109,14 +109,14 @@ All three entry points accept the same keyword arguments and return the same rec
 ```python
 find_citations(doi, sources='all', output='json', email=None, api_keys=None, ...)
 find_citations_batch(dois, sources='all', output='long', output_path=None, ...)
-find_citations_by_shoulder(shoulder, sources='all', output='long', ...)
+find_citations_by_prefix(prefix, sources='all', output='long', ...)
 ```
 
 ### 6.2 Parameters
 
 | Parameter | Type | Description |
 |---|---|---|
-| `doi` / `dois` / `shoulder` | str / Iterable[str] / str | Input DOI, DOI iterable, or shoulder prefix |
+| `doi` / `dois` / `prefix` | str / Iterable[str] / str | Input DOI, DOI iterable, or DOI prefix |
 | `sources` | str \| list | `'all'` or subset (e.g., `['openalex', 'datacite_events']`) |
 | `output` | str | `'json'`, `'csv'`, `'bibtex'`, or `'long'` |
 | `output_path` | str \| Path \| None | Destination for CSV/Parquet/BibTeX outputs |
@@ -169,7 +169,7 @@ The `collapse_sources()` helper adds `sources` (list), `source_count` (int), `re
 - **Pagination**: cursor-based (`page[cursor]`)
 - **Key queries**:
   - Per-DOI: `obj-id=<doi>&relation-type-id=<type>` (one request per relation type, or omit the filter and filter client-side)
-  - Prefix: `obj-id.prefix=<shoulder>&relation-type-id=<type>`
+  - Prefix: `obj-id.prefix=<prefix>&relation-type-id=<type>`
 - **Default relation types counted as citations**: all six citation/reference types — `is-cited-by`, `is-referenced-by`, `is-supplement-to`, `cites`, `references`, `is-supplemented-by`. The first three are populated when a data repository records a citation from the dataset's side; the latter three are populated when a paper's reference list contains the dataset DOI — notably, CrossRef-sourced events arrive as `references`, so excluding them would miss the bulk of real citations.
 - **Excluded by default** (structural, not citations): `is-part-of`, `is-version-of`, `has-version`, `is-new-version-of`, `is-previous-version-of`, `is-derived-from`, `is-source-of`, `is-continued-by`, `continues`, `is-identical-to`, `has-part`, `is-variant-form-of`, `is-original-form-of`.
 - **Relation-type normalization**: the adapter treats the three inverse pairs symmetrically. When emitting a record, `cited_doi` is always the dataset and `citing_doi` is always the citing work, regardless of which direction the event was recorded in. The original raw relation type is preserved in the output's `relation_type` column (§7).
@@ -208,7 +208,7 @@ Retired from default. Uses `scholarly` library with configurable delay and optio
 
 Three auto-selected paths:
 
-**a. Shoulder path** — `find_citations_by_shoulder(prefix)` uses DataCite Events' native prefix filter for that adapter; other adapters receive an enumerated DOI list from `ShoulderEnumerator`.
+**a. Prefix path** — `find_citations_by_prefix(prefix)` uses DataCite Events' native prefix filter for that adapter; other adapters receive an enumerated DOI list from `PrefixEnumerator`.
 
 **b. Batch path** — `find_citations_batch(dois)` dispatches each adapter to its most efficient mode: native batching (Dimensions), concurrent per-DOI (OpenAlex, Semantic Scholar, CrossRef, OpenCitations), or prefix-aggregated-then-filtered when the input list shares a common prefix and the adapter supports prefix queries (DataCite Events).
 
@@ -278,11 +278,11 @@ config = {
 
 Previously open questions from the original design, now decided:
 
-- **Shoulder expansion strategy** → Two-path: DataCite Events uses its native prefix filter; other adapters use a shared `ShoulderEnumerator` backed by DataCite's `/dois` endpoint with disk caching.
+- **Prefix expansion strategy** → Two-path: DataCite Events uses its native prefix filter; other adapters use a shared `PrefixEnumerator` backed by DataCite's `/dois` endpoint with disk caching.
 - **Google Scholar status** → Retired from default source set; remains as opt-in.
 - **Multi-source output** → Merged into a single result set with provenance preserved (`sources` list + long-format table).
 - **Relation-type scope** → Include all six DataCite citation/reference relation types by default: `is-cited-by`, `is-referenced-by`, `is-supplement-to`, `cites`, `references`, `is-supplemented-by`. Rationale: the three "citation" types (dataset-side) and the three "reference" types (paper-side) describe the same underlying relationship from opposite directions. Critically, CrossRef-derived events in DataCite Event Data use `references`, so filtering to only `is-cited-by` would exclude the majority of real-world citations. Raw relation type is preserved per-record in the `relation_type` output column so downstream consumers can re-filter.
-- **Async exposure** → Public API is sync-only. Adapters may use async HTTP internally (via `httpx.AsyncClient`) for concurrency within a run, but the three entry points (`find_citations`, `find_citations_batch`, `find_citations_by_shoulder`) and `collapse_sources` are ordinary blocking functions. Rationale: keeps the library easy to use from scripts, notebooks, and non-async codebases; async concurrency is an implementation detail, not a user concern.
+- **Async exposure** → Public API is sync-only. Adapters may use async HTTP internally (via `httpx.AsyncClient`) for concurrency within a run, but the three entry points (`find_citations`, `find_citations_batch`, `find_citations_by_prefix`) and `collapse_sources` are ordinary blocking functions. Rationale: keeps the library easy to use from scripts, notebooks, and non-async codebases; async concurrency is an implementation detail, not a user concern.
 - **Output store format** → SQLite for the in-run checkpoint store (zero-dependency, native incremental writes, naturally supports the `(source, cited_doi)` resume key); Parquet or CSV for final export (Parquet preferred for large runs, CSV when downstream tools require it). BibTeX and JSON remain available as final export formats for the grouped-record shape.
 
 ## 14. Open Questions
@@ -296,15 +296,15 @@ Previously open questions from the original design, now decided:
 
 1. `utils.normalize_doi()` + unit tests
 2. `schema.CitationRecord` (pydantic) and long-format row types
-3. `enumeration.ShoulderEnumerator` — DataCite-backed DOI enumeration with disk cache
+3. `enumeration.PrefixEnumerator` — DataCite-backed DOI enumeration with disk cache
 4. Existing adapters: OpenAlex, Semantic Scholar, CrossRef (reuse)
 5. New adapters: `DataCiteEventsAdapter`, `OpenCitationsAdapter`, `DimensionsAdapter`
 6. Merge/dedup engine (DOI-first, fuzzy fallback)
 7. Formatters: JSON, CSV, BibTeX, `LongFormatFormatter` + `collapse_sources()`
-8. Entry points: `find_citations`, `find_citations_batch`, `find_citations_by_shoulder`
+8. Entry points: `find_citations`, `find_citations_batch`, `find_citations_by_prefix`
 9. Checkpoint store (SQLite) and resume logic
 10. Integration tests against ~20 known-cited dataset DOIs drawn from multiple repositories (EDI, Dryad, Zenodo, Dataverse) to validate generality
-11. Scale test: full EDI shoulder sweep end-to-end; record per-source latency, record counts, and overlap
+11. Scale test: full EDI prefix sweep end-to-end; record per-source latency, record counts, and overlap
 12. README and example notebook
 
 ## 16. Future Work
@@ -316,7 +316,7 @@ Previously open questions from the original design, now decided:
 
 ## 17. Deliverables
 
-- Python library with adapters, merge engine, formatters, and batch/shoulder entry points
+- Python library with adapters, merge engine, formatters, and batch/prefix entry points
 - Checkpoint/resume support for long runs
-- Example notebook demonstrating (a) a single-DOI lookup, (b) a batch run over a custom list, and (c) a full-repository sweep via shoulder
+- Example notebook demonstrating (a) a single-DOI lookup, (b) a batch run over a custom list, and (c) a full-repository sweep via prefix
 - This design document (committed alongside the library)

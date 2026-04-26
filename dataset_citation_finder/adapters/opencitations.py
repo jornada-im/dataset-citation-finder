@@ -25,7 +25,7 @@ class OpenCitationsAdapter(SourceAdapter):
     supports_batch = False
     # OpenCitations is a free service with low rate limits; keep concurrent
     # requests low and hold the slot briefly after each response to avoid
-    # triggering 429s on large shoulder sweeps.
+    # triggering 429s on large prefix sweeps.
     default_concurrency = 2
     inter_request_delay = 0.5  # seconds
 

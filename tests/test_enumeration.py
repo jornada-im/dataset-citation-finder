@@ -1,4 +1,4 @@
-"""Tests for ShoulderEnumerator."""
+"""Tests for PrefixEnumerator."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import time
 import httpx
 import pytest
 
-from dataset_citation_finder.enumeration import ShoulderEnumerator
+from dataset_citation_finder.enumeration import PrefixEnumerator
 
 
 def _dois_page(dois, next_url=None):
@@ -18,7 +18,7 @@ def _dois_page(dois, next_url=None):
     }
 
 
-class TestShoulderEnumerator:
+class TestPrefixEnumerator:
 
     @pytest.mark.asyncio
     async def test_single_page(self, tmp_path):
@@ -30,7 +30,7 @@ class TestShoulderEnumerator:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
                                    base_url="http://mocked")
-        enum = ShoulderEnumerator(client, cache_dir=tmp_path)
+        enum = PrefixEnumerator(client, cache_dir=tmp_path)
         dois = await enum.enumerate("10.6073")
         assert sorted(dois) == ["10.6073/pasta/a", "10.6073/pasta/b"]
         await client.aclose()
@@ -50,7 +50,7 @@ class TestShoulderEnumerator:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
                                    base_url="http://mocked")
-        enum = ShoulderEnumerator(client, cache_dir=tmp_path)
+        enum = PrefixEnumerator(client, cache_dir=tmp_path)
         dois = await enum.enumerate("10.6073")
         assert sorted(dois) == ["10.6073/pasta/a", "10.6073/pasta/b"]
         await client.aclose()
@@ -65,7 +65,7 @@ class TestShoulderEnumerator:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
                                    base_url="http://mocked")
-        enum = ShoulderEnumerator(client, cache_dir=tmp_path)
+        enum = PrefixEnumerator(client, cache_dir=tmp_path)
 
         dois1 = await enum.enumerate("10.6073")
         assert call_count[0] == 1
@@ -81,11 +81,11 @@ class TestShoulderEnumerator:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
                                    base_url="http://mocked")
-        enum = ShoulderEnumerator(client, cache_dir=tmp_path, ttl_seconds=0)
+        enum = PrefixEnumerator(client, cache_dir=tmp_path, ttl_seconds=0)
         await enum.enumerate("10.6073")
 
         # Cache file exists but is already stale (ttl=0).
-        cache_path = tmp_path / "shoulder_10.6073.json"
+        cache_path = tmp_path / "prefix_10.6073.json"
         assert cache_path.exists()
         payload = json.loads(cache_path.read_text())
         # Force timestamp far in the past.
@@ -101,7 +101,7 @@ class TestShoulderEnumerator:
 
         client2 = httpx.AsyncClient(transport=httpx.MockTransport(handler2),
                                     base_url="http://mocked")
-        enum2 = ShoulderEnumerator(client2, cache_dir=tmp_path, ttl_seconds=0)
+        enum2 = PrefixEnumerator(client2, cache_dir=tmp_path, ttl_seconds=0)
         await enum2.enumerate("10.6073")
         assert new_client_calls[0] >= 1
         await client.aclose()
@@ -115,7 +115,7 @@ class TestShoulderEnumerator:
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
                                    base_url="http://mocked")
-        enum = ShoulderEnumerator(client, cache_dir=None)
+        enum = PrefixEnumerator(client, cache_dir=None)
         dois = await enum.enumerate("10.6073")
         assert dois == ["10.6073/pasta/a"]
         await client.aclose()

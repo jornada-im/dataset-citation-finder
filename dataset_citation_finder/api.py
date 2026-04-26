@@ -3,7 +3,7 @@
 These are the only functions users should need to import:
     - find_citations(doi, ...)
     - find_citations_batch(dois, ...)
-    - find_citations_by_shoulder(shoulder, ...)
+    - find_citations_by_prefix(prefix, ...)
     - collapse_sources(df)  # re-exported from collapse module
 """
 
@@ -20,7 +20,7 @@ from .adapters import DEFAULT_SOURCES, REGISTRY
 from .adapters.base import SourceAdapter
 from .collapse import collapse_sources
 from .engine import collect_rows, rows_to_dataframe, rows_to_grouped
-from .enumeration import ShoulderEnumerator
+from .enumeration import PrefixEnumerator
 from .http_client import make_client
 from .schema import GroupedRecord
 from .utils import normalize_doi
@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 __all__ = [
     "find_citations",
     "find_citations_batch",
-    "find_citations_by_shoulder",
+    "find_citations_by_prefix",
     "collapse_sources",
 ]
 
@@ -96,8 +96,8 @@ def find_citations_batch(
                 email=email, concurrency=concurrency, **adapter_opts)
 
 
-def find_citations_by_shoulder(
-    shoulder: str,
+def find_citations_by_prefix(
+    prefix: str,
     *,
     sources: Iterable[str] | str = "all",
     output: str = "long",
@@ -106,14 +106,14 @@ def find_citations_by_shoulder(
     cache_dir: str | None = None,
     **adapter_opts: Any,
 ) -> pd.DataFrame | list[GroupedRecord]:
-    """Find citations for every DOI under a shoulder prefix.
+    """Find citations for every DOI under a DOI prefix.
 
     Prefix-capable adapters (DataCite Events) query their native prefix
     endpoint. Per-DOI adapters receive an enumerated DOI list from
-    ShoulderEnumerator (cached on disk).
+    PrefixEnumerator (cached on disk).
     """
-    shoulder = shoulder.lower().rstrip("/")
-    return _run(dois=None, prefix=shoulder, sources=sources, output=output,
+    prefix = prefix.lower().rstrip("/")
+    return _run(dois=None, prefix=prefix, sources=sources, output=output,
                 email=email, concurrency=concurrency, cache_dir=cache_dir,
                 **adapter_opts)
 
@@ -166,7 +166,7 @@ def _run(
             if not adapters:
                 raise ValueError("no adapters resolved from requested sources")
 
-            # For shoulder queries: enumerate DOIs for the per-DOI adapters.
+            # For prefix queries: enumerate DOIs for the per-DOI adapters.
             effective_dois = dois
             if prefix is not None:
                 non_prefix_adapters = [a for a in adapters if not a.supports_prefix]
@@ -175,9 +175,9 @@ def _run(
                 rows_prefix = await collect_rows(prefix_adapters, prefix=prefix) if prefix_adapters else []
 
                 if non_prefix_adapters:
-                    enumerator = ShoulderEnumerator(client, cache_dir=cache_dir)
+                    enumerator = PrefixEnumerator(client, cache_dir=cache_dir)
                     enumerated = await enumerator.enumerate(prefix)
-                    log.info("shoulder %s: %d DOIs enumerated", prefix, len(enumerated))
+                    log.info("prefix %s: %d DOIs enumerated", prefix, len(enumerated))
                     rows_per_doi = await collect_rows(non_prefix_adapters, dois=enumerated) if enumerated else []
                 else:
                     rows_per_doi = []

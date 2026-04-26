@@ -1,7 +1,7 @@
 """DataCite Event Data adapter.
 
 Queries https://api.datacite.org/events for citation relationships involving
-dataset DOIs. Supports both single-DOI and prefix (shoulder) queries.
+dataset DOIs. Supports both single-DOI and prefix queries.
 
 Relation-type handling: DataCite records citations as six types in three
 inverse pairs — see design doc §8.1. This adapter treats all six as citations

@@ -15,9 +15,9 @@ Early development. Implemented and tested:
 - Adapters (stubs, raise `NotImplementedError`): Semantic Scholar, CrossRef, Dimensions, Google Scholar
 - `engine.collect_rows` — adapter orchestration with per-adapter isolation
 - `collapse.collapse_sources` — long-format → deduplicated view
-- `enumeration.ShoulderEnumerator` — DataCite-backed DOI enumeration with disk cache
+- `enumeration.PrefixEnumerator` — DataCite-backed DOI enumeration with disk cache
 - `http_client` — polite-pool User-Agent, exponential backoff with jitter, `Retry-After` respect
-- Public API: `find_citations`, `find_citations_batch`, `find_citations_by_shoulder`, `collapse_sources`
+- Public API: `find_citations`, `find_citations_batch`, `find_citations_by_prefix`, `collapse_sources`
 
 Not yet implemented:
 
@@ -47,7 +47,7 @@ pip install -e ".[dev]"        # pytest, pytest-asyncio
 from dataset_citation_finder import (
     find_citations,
     find_citations_batch,
-    find_citations_by_shoulder,
+    find_citations_by_prefix,
     collapse_sources,
 )
 
@@ -60,8 +60,8 @@ df = find_citations_batch([
     "10.5281/zenodo.1234567",
 ])
 
-# Full repository sweep by shoulder prefix
-df = find_citations_by_shoulder("10.6073", email="you@example.org",
+# Full repository sweep by DOI prefix
+df = find_citations_by_prefix("10.6073", email="you@example.org",
                                 cache_dir="~/.cache/dcf")
 
 # Collapse to one row per unique edge with sources as a list
