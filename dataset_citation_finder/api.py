@@ -138,7 +138,8 @@ def _build_adapters(
         if cls is None:
             log.warning("unknown source %r; skipping", sid)
             continue
-        kwargs: dict[str, Any] = {"concurrency": concurrency}
+        effective_concurrency = min(concurrency, cls.default_concurrency)
+        kwargs: dict[str, Any] = {"concurrency": effective_concurrency}
         # Forward adapter-specific options.
         if sid == "datacite_events" and "relation_types" in adapter_opts:
             kwargs["relation_types"] = adapter_opts["relation_types"]

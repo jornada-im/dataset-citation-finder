@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 
 import pytest
@@ -71,3 +72,18 @@ class TestQueryBatchFanout:
         rows = [r async for r in adapter.query_batch([])]
         assert rows == []
         assert adapter.called_for == []
+
+    @pytest.mark.asyncio
+    async def test_inter_request_delay_is_honored(self):
+        """inter_request_delay holds the semaphore slot, spreading requests out."""
+        delay = 0.05
+        adapter = TrackingAdapter(concurrency=1)
+        adapter.inter_request_delay = delay
+        dois = ["10.6073/a", "10.6073/b", "10.6073/c"]
+        t0 = time.monotonic()
+        rows = [r async for r in adapter.query_batch(dois)]
+        elapsed = time.monotonic() - t0
+        assert len(rows) == 3
+        # With concurrency=1, each slot must be held for at least `delay`
+        # seconds, so total time >= n * delay.
+        assert elapsed >= len(dois) * delay

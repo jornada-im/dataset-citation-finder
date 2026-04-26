@@ -23,6 +23,11 @@ class OpenCitationsAdapter(SourceAdapter):
     source_id = "opencitations"
     supports_prefix = False
     supports_batch = False
+    # OpenCitations is a free service with low rate limits; keep concurrent
+    # requests low and hold the slot briefly after each response to avoid
+    # triggering 429s on large shoulder sweeps.
+    default_concurrency = 2
+    inter_request_delay = 0.5  # seconds
 
     async def query_single(self, doi: str) -> AsyncIterator[LongRow]:
         url = f"{BASE_URL}/doi:{doi}"

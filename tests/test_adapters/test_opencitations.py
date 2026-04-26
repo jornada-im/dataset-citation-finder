@@ -5,7 +5,17 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from dataset_citation_finder.adapters.base import SourceAdapter
 from dataset_citation_finder.adapters.opencitations import OpenCitationsAdapter
+
+
+class TestOpenCitationsRateLimitAttributes:
+
+    def test_concurrency_lower_than_default(self):
+        assert OpenCitationsAdapter.default_concurrency < SourceAdapter.default_concurrency
+
+    def test_inter_request_delay_set(self):
+        assert OpenCitationsAdapter.inter_request_delay > 0
 
 
 class TestOpenCitationsAdapter:

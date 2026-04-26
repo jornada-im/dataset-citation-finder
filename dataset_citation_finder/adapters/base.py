@@ -29,6 +29,12 @@ class SourceAdapter(abc.ABC):
     source_id: str  # e.g. "datacite_events"; set on each subclass
     supports_prefix: bool = False
     supports_batch: bool = False
+    # Adapters with strict rate limits can lower this; the engine respects it
+    # as a ceiling even when the caller requests higher global concurrency.
+    default_concurrency: int = 8
+    # Minimum pause held inside the semaphore after each request completes.
+    # Prevents bursty patterns when responses are fast.
+    inter_request_delay: float = 0.0
 
     def __init__(self, client: httpx.AsyncClient, *, concurrency: int = 8) -> None:
         self._client = client
@@ -58,6 +64,8 @@ class SourceAdapter(abc.ABC):
                         rows.append(row)
                 except Exception:
                     log.exception("%s: query_single(%s) failed", self.source_id, doi)
+                if self.inter_request_delay > 0:
+                    await asyncio.sleep(self.inter_request_delay)
                 return rows
 
         tasks = [asyncio.create_task(_run_one(d)) for d in dois]
