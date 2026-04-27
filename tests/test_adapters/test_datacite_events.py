@@ -38,21 +38,17 @@ def _response_body(events, next_url=None):
 class TestDataCiteEventsAdapter:
 
     @pytest.mark.asyncio
-    async def test_object_side_query_normalizes_direction(self, make_mock_client):
-        """For `is-cited-by`: obj-id is the dataset, subj-id is the citer."""
-        calls = []
-
+    async def test_subject_side_query_normalizes_direction(self, make_mock_client):
+        """For `is-cited-by`: subj-id is the dataset, obj-id is the citer."""
         def handler(request):
-            calls.append(dict(request.url.params))
-            # First call: object-side with obj-id set
-            if "obj-id" in request.url.params:
+            # Subject-side query: filter by subj-id.
+            if "subj-id" in request.url.params:
                 return httpx.Response(200, json=_response_body([
                     _event("evt-1",
-                           subj="https://doi.org/10.1038/nature1",
-                           obj="https://doi.org/10.6073/pasta/abc",
+                           subj="https://doi.org/10.6073/pasta/abc",
+                           obj="https://doi.org/10.1038/nature1",
                            relation="is-cited-by"),
                 ]))
-            # Subject-side call returns empty
             return httpx.Response(200, json=_response_body([]))
 
         client = make_mock_client(handler)
@@ -69,7 +65,7 @@ class TestDataCiteEventsAdapter:
 
     @pytest.mark.asyncio
     async def test_references_relation_counted(self, make_mock_client):
-        """CrossRef-sourced events use `references` — critical case."""
+        """CrossRef-sourced events use `references` (object-side: dataset on obj)."""
         def handler(request):
             if "obj-id" in request.url.params:
                 return httpx.Response(200, json=_response_body([
@@ -94,8 +90,8 @@ class TestDataCiteEventsAdapter:
         call_count = [0]
 
         def handler(request):
-            # Only interested in object-side calls for this test.
-            if "obj-id" not in request.url.params:
+            # Only interested in subject-side calls (is-cited-by) for this test.
+            if "subj-id" not in request.url.params:
                 return httpx.Response(200, json=_response_body([]))
 
             call_count[0] += 1
@@ -103,16 +99,16 @@ class TestDataCiteEventsAdapter:
             if cursor == "1":
                 return httpx.Response(200, json=_response_body(
                     [_event("e1",
-                            subj="https://doi.org/10.1038/a",
-                            obj="https://doi.org/10.6073/pasta/abc",
+                            subj="https://doi.org/10.6073/pasta/abc",
+                            obj="https://doi.org/10.1038/a",
                             relation="is-cited-by")],
                     next_url="https://api.datacite.org/events?page%5Bcursor%5D=2",
                 ))
             if cursor == "2":
                 return httpx.Response(200, json=_response_body(
                     [_event("e2",
-                            subj="https://doi.org/10.1038/b",
-                            obj="https://doi.org/10.6073/pasta/abc",
+                            subj="https://doi.org/10.6073/pasta/abc",
+                            obj="https://doi.org/10.1038/b",
                             relation="is-cited-by")]
                 ))
             return httpx.Response(200, json=_response_body([]))
@@ -123,7 +119,7 @@ class TestDataCiteEventsAdapter:
         assert len(rows) == 2
         citing = {r.citing_doi for r in rows}
         assert citing == {"10.1038/a", "10.1038/b"}
-        # At least 2 object-side calls (cursor 1 + cursor 2).
+        # At least 2 subject-side calls (cursor 1 + cursor 2).
         assert call_count[0] >= 2
         await client.aclose()
 
@@ -131,15 +127,15 @@ class TestDataCiteEventsAdapter:
     async def test_filters_out_unwanted_relation_types(self, make_mock_client):
         """`is-version-of` must NOT count as a citation (structural relation)."""
         def handler(request):
-            if "obj-id" in request.url.params:
+            if "subj-id" in request.url.params:
                 return httpx.Response(200, json=_response_body([
                     _event("e1",
-                           subj="https://doi.org/10.6073/pasta/v2",
-                           obj="https://doi.org/10.6073/pasta/abc",
+                           subj="https://doi.org/10.6073/pasta/abc",
+                           obj="https://doi.org/10.6073/pasta/v2",
                            relation="is-version-of"),
                     _event("e2",
-                           subj="https://doi.org/10.1038/citer",
-                           obj="https://doi.org/10.6073/pasta/abc",
+                           subj="https://doi.org/10.6073/pasta/abc",
+                           obj="https://doi.org/10.1038/citer",
                            relation="is-cited-by"),
                 ]))
             return httpx.Response(200, json=_response_body([]))
@@ -153,27 +149,68 @@ class TestDataCiteEventsAdapter:
 
     @pytest.mark.asyncio
     async def test_prefix_query_uses_prefix_filter(self, make_mock_client):
-        """Prefix mode should hit `obj-id.prefix=10.6073`."""
+        """Prefix mode should hit `prefix=10.6073` (NOT `obj-id.prefix`)
+        and split the query by relation-type side."""
         seen_params = []
 
         def handler(request):
-            seen_params.append(dict(request.url.params))
-            return httpx.Response(200, json=_response_body([
-                _event("e1",
-                       subj="https://doi.org/10.1038/citer",
-                       obj="https://doi.org/10.6073/pasta/xyz",
-                       relation="is-cited-by"),
-            ]))
+            params = dict(request.url.params)
+            seen_params.append(params)
+            relations = params.get("relation-type-id", "")
+            # Subject-side query (is-cited-by): dataset on subj-id.
+            if "is-cited-by" in relations:
+                return httpx.Response(200, json=_response_body([
+                    _event("e1",
+                           subj="https://doi.org/10.6073/pasta/xyz",
+                           obj="https://doi.org/10.1038/citer",
+                           relation="is-cited-by"),
+                ]))
+            # Object-side query (cites/references): dataset on obj-id.
+            if "references" in relations or "cites" in relations:
+                return httpx.Response(200, json=_response_body([
+                    _event("e2",
+                           subj="https://doi.org/10.1038/other-citer",
+                           obj="https://doi.org/10.6073/pasta/qrs",
+                           relation="references"),
+                ]))
+            return httpx.Response(200, json=_response_body([]))
 
         client = make_mock_client(handler)
         adapter = DataCiteEventsAdapter(client)
         rows = [r async for r in adapter.query_prefix("10.6073")]
-        assert len(rows) == 1
-        assert rows[0].cited_doi == "10.6073/pasta/xyz"
-        # Verify the prefix filter was actually applied.
-        assert any("obj-id.prefix" in p and p["obj-id.prefix"] == "10.6073" for p in seen_params)
-        # And object-side relations were requested.
-        assert any("is-cited-by" in p.get("relation-type-id", "") for p in seen_params)
+        cited = {r.cited_doi for r in rows}
+        assert cited == {"10.6073/pasta/xyz", "10.6073/pasta/qrs"}
+        # The correct prefix filter was used (NOT obj-id.prefix).
+        assert all("obj-id.prefix" not in p for p in seen_params)
+        assert any(p.get("prefix") == "10.6073" for p in seen_params)
+        # Each cited_doi starts with the requested prefix (regression guard).
+        for r in rows:
+            assert r.cited_doi.startswith("10.6073")
+
+    @pytest.mark.asyncio
+    async def test_prefix_query_drops_events_outside_prefix(self, make_mock_client):
+        """When `prefix=` matches a non-dataset participant rather than the
+        dataset itself, the resulting row's cited_doi won't start with the
+        prefix and must be dropped."""
+        def handler(request):
+            params = dict(request.url.params)
+            relations = params.get("relation-type-id", "")
+            # Subject-side: subj-id is supposed to be the dataset, but here
+            # we return an event where subj-id has the wrong prefix (the
+            # `prefix=` filter happened to match obj-id instead).
+            if "is-cited-by" in relations:
+                return httpx.Response(200, json=_response_body([
+                    _event("e-bad",
+                           subj="https://doi.org/10.1038/not-edi",
+                           obj="https://doi.org/10.6073/pasta/something",
+                           relation="is-cited-by"),
+                ]))
+            return httpx.Response(200, json=_response_body([]))
+
+        client = make_mock_client(handler)
+        adapter = DataCiteEventsAdapter(client)
+        rows = [r async for r in adapter.query_prefix("10.6073")]
+        assert rows == []
         await client.aclose()
 
     @pytest.mark.asyncio
@@ -188,11 +225,11 @@ class TestDataCiteEventsAdapter:
     async def test_bare_doi_in_event(self, make_mock_client):
         """Event IDs may be bare DOIs without https://doi.org/ prefix."""
         def handler(request):
-            if "obj-id" in request.url.params:
+            if "subj-id" in request.url.params:
                 return httpx.Response(200, json=_response_body([
                     _event("e1",
-                           subj="10.1038/a",   # no URL prefix
-                           obj="10.6073/pasta/abc",
+                           subj="10.6073/pasta/abc",   # no URL prefix
+                           obj="10.1038/a",
                            relation="is-cited-by"),
                 ]))
             return httpx.Response(200, json=_response_body([]))
