@@ -10,22 +10,24 @@ The canonical source of truth for design decisions is **`docs/dataset_citation_f
 
 ## Architecture (one-paragraph version)
 
-Three layers: **source adapters → merge/dedup engine → output formatters.** Adapters share a common `SourceAdapter` interface and emit `LongRow` records (one per source attribution, intentionally undeduplicated). The engine collects rows from configured adapters and produces either a long-format pandas DataFrame or a list of `GroupedRecord` objects (merged by citing DOI). Public API is sync-only; async is an internal concurrency mechanism, not a user-facing concern. DOI normalization happens at every adapter's output boundary so dedup keys are reliable regardless of upstream formatting.
+Four layers: **source adapters → SQLite store → coalesce → exporters.** Adapters share a common `SourceAdapter` interface and emit `LongRow` records. For batch and prefix runs, the engine streams those rows directly into per-source raw tables in a SQLite store (`source_datacite_events`, `source_openalex`, `source_opencitations`); a `coalesce` step then rebuilds a canonical `citations` table with `sources` and `relation_types` aggregated per `(cited_doi, citing_doi)` edge. For single-DOI lookups the in-memory path (DataFrame / GroupedRecord) is preserved. Public API is sync-only; async is an internal concurrency mechanism. DOI normalization happens at every adapter's output boundary so dedup keys are reliable.
 
 ## Current implementation status
 
-**Implemented and tested (81 unit tests, all passing):**
+**Implemented:**
 - `utils.normalize_doi` — canonical DOI form
 - `schema.LongRow` / `schema.GroupedRecord` — pydantic models with DOI validation
 - `http_client` — polite-pool User-Agent, exponential backoff with jitter, `Retry-After` respect
 - `enumeration.PrefixEnumerator` — DataCite-backed DOI enumeration with disk cache
-- `engine` — adapter orchestration with per-adapter exception isolation
-- `collapse.collapse_sources` — long-format → deduplicated view
+- `engine.collect_rows` (in-memory) and `engine.collect_to_store` (SQLite-backed)
+- `collapse.collapse_citations_df` — in-memory long DataFrame → deduplicated view
+- `store/` — schema v2 DDL with `meta`/`runs`/`cited_dois`/`queried_dois`/`doi_validations`/`source_*`/`citations` tables; `open_store` with `application_id` validation, schema-version checks, and forward-only migrations (m001 initial, m002 cited_dois); per-source upsert helpers; SQLite-backed `coalesce_citations`; read-only `describe_store`.
+- `validation.validate_dois_async` (+ public `validate_dois`) — DOI handle resolver + optional DataCite/CrossRef registrar probes; in-memory or persisted into `cited_dois` + `doi_validations`.
 - `adapters.base.SourceAdapter` — base ABC + default `query_batch` fanout
-- `adapters.datacite_events.DataCiteEventsAdapter` — full implementation, both per-DOI and prefix paths
-- `adapters.opencitations.OpenCitationsAdapter` — full per-DOI implementation
-- `adapters.openalex.OpenAlexAdapter` — full implementation with DOI → work-ID resolution and cursor pagination
-- Public API: `find_citations`, `find_citations_batch`, `find_citations_by_prefix`, `collapse_sources`
+- `adapters.datacite_events.DataCiteEventsAdapter` — full, per-DOI and prefix
+- `adapters.opencitations.OpenCitationsAdapter` — full per-DOI
+- `adapters.openalex.OpenAlexAdapter` — full, with DOI → work-ID resolution and cursor pagination
+- Public API: `find_citations`, `find_citations_batch`, `find_citations_by_prefix`, `validate_dois`, `coalesce_citations`, `read_citations`, `export_citations`, `open_store`, `describe_store`, `collapse_citations_df`. `find_citations` and `find_citations_batch` accept an optional `db_path` (without it: in-memory DataFrame). `find_citations_by_prefix` requires `db_path`. `validate_dois` is decoupled from the citation pipeline and persists results into `cited_dois` (latest status) and `doi_validations` (audit log).
 
 **Stubs that raise `NotImplementedError`:**
 - `adapters.stubs.SemanticScholarAdapter`
@@ -33,13 +35,10 @@ Three layers: **source adapters → merge/dedup engine → output formatters.** 
 - `adapters.stubs.DimensionsAdapter` (also: only registers if credentials detected)
 - `adapters.stubs.GoogleScholarAdapter` (opt-in only)
 
-These are in the default source list, so a default `find_citations(doi)` call logs two non-fatal `NotImplementedError` warnings (Semantic Scholar, CrossRef) per DOI and continues with the three working adapters. Pass an explicit `sources=[...]` list to silence.
-
 **Not yet built:**
-- SQLite checkpoint/resume store for long-running prefix sweeps (design §6, §15 step 9)
-- BibTeX file-output formatter (design §4.3)
-- CSV file-output formatter as a first-class output (the long-format DataFrame supports `.to_csv` already)
+- BibTeX export
 - Live integration tests against real APIs
+- Incremental coalesce on dirty pairs (currently truncate-and-rebuild)
 
 ## Open design questions (still unresolved)
 
@@ -54,18 +53,20 @@ From design doc §14:
 
 - **DataCite Events `page_size=1000` causes read timeouts on prefix sweeps.** EDI's `10.6073` prefix has tens of thousands of citation events. At 1000 events/page, response generation can exceed 30s and trigger `httpx.ReadTimeout`. **For now leave `page_size` at 1000, but bumped `DEFAULT_TIMEOUT` to 60s.** Both should be exposed through the public API in a follow-up.
 - **`enumeration.py` `page_size` is unrelated** — that endpoint returns small uniform rows and is not the bottleneck. Leave at 1000.
-- **One failed page = lost data.** When a page times out beyond max retries, the cursor stream ends because the failing page also held the `next` link. Recovery requires either re-running with smaller pages, or falling back to `find_citations_batch` with the per-DOI path. A proper checkpoint/resume layer would prevent this entirely (design §6).
-- **Adapter ordering in API layer is sequential** — DataCite prefix path runs to completion before per-DOI adapters start. If DataCite stalls, the whole run stalls. Worth revisiting if checkpoint/resume is added.
+- **Resume semantics live in the store now.** Each `(cited_doi, source)` pair queried bumps `queried_dois.last_queried_at`; passing `refresh_after=timedelta(...)` to a re-run skips pairs queried within the window. An interrupted run rolls back the per-run transaction (so writes are atomic per call) but re-running is the recovery path — there is no separate checkpoint file.
+- **Adapter ordering in API layer is sequential per-source** — within `_run_to_store`, prefix-capable adapters run before per-DOI adapters, and per-DOI adapters are dispatched one at a time so the freshness filter can be applied per-source. If a single source stalls, that source's portion of the run stalls; others run normally if dispatched first.
 
 ## Decisions worth knowing about
 
 These are settled but nontrivial — see design §13 for full reasoning.
 
 - **All six DataCite citation/reference relation types are in the default set**, not just `is-cited-by`. CrossRef-derived events arrive as `references`, so filtering only `is-cited-by` would miss the bulk of real citations. Raw `relation_type` is preserved per-row for downstream filtering.
-- **Provenance is first-class.** The long-format table is intentionally undeduplicated — one row per `(cited_doi, citing_doi, source)` tuple. `collapse_sources()` produces the deduplicated view with `sources` and `relation_types` lists. Cross-source agreement is a signal, not noise.
+- **Provenance is first-class.** Per-source raw tables (`source_*`) are intentionally undeduplicated — one row per source-side observation. `coalesce_citations()` (or `collapse_citations_df()` for the in-memory single-DOI path) produces the deduplicated view with `sources` and `relation_types` lists. Cross-source agreement is a signal, not noise.
 - **Google Scholar is opt-in only** (in registry but not in `DEFAULT_SOURCES`).
 - **Public API is sync-only.** Adapters use `httpx.AsyncClient` internally; the entry points wrap with `asyncio.run`.
-- **Output store format:** SQLite for the in-run checkpoint (when implemented); Parquet/CSV for export.
+- **Canonical output is a SQLite store.** Per-source raw tables + a coalesced `citations` table; CSV / Parquet are derived via `export_citations`. The store stamps `application_id = 0x44434646` plus a `meta` row with `schema_version` and `library_version`, so re-opening a foreign or older file is safe (raises `StoreFormatError` / `SchemaVersionError`, or auto-migrates).
+- **`cited_dois` is separate from `queried_dois`.** `cited_dois` is the in-scope DOI registry — every DOI the user submitted as input or that prefix enumeration surfaced, regardless of whether any source returned citations for it. `queried_dois` is the per-`(cited_doi, source)` freshness ledger that drives `refresh_after`. The "uncited DOIs" question is `LEFT JOIN cited_dois LEFT JOIN citations`.
+- **DOI validation is opt-in and decoupled.** `validate_dois` is a separate function; the citation entry points never call it. Validation results persist into `cited_dois.validation_status` (latest) and `doi_validations` (per-event audit log).
 
 ## Project conventions
 
@@ -84,19 +85,26 @@ uv sync --extra dev   # or: pip install -e ".[dev]"
 # Run all tests
 uv run pytest         # or: python -m pytest
 
-# Run a quick end-to-end check
+# Single-DOI in-memory check
 python -c "from dataset_citation_finder import find_citations; \
            print(find_citations('10.6073/pasta/<your-doi>', \
                                 sources=['datacite_events', 'openalex', 'opencitations'], \
                                 email='you@example.org'))"
+
+# Build / update a SQLite store
+python -c "from dataset_citation_finder import find_citations_batch; \
+           s = find_citations_batch(['10.6073/pasta/<doi>'], 'citations.sqlite', \
+                                    email='you@example.org'); \
+           print(s.run_id, s.total_rows_written, s.coalesced)"
 ```
 
 ## Where to look first
 
-- New adapter? → mirror `adapters/openalex.py` or `adapters/opencitations.py` (per-DOI) or `adapters/datacite_events.py` (prefix-capable). Add to `REGISTRY` in `adapters/__init__.py`. Add to `DEFAULT_SOURCES` only if it's enabled by default.
-- Public API change? → `api.py`. Keep it sync-wrapping `_pipeline()`.
-- Schema change? → `schema.py` (LongRow / GroupedRecord). DOI fields are validated by `normalize_doi` at the boundary — keep that invariant.
-- Output format change? → currently long-format DataFrame and grouped records are produced in `engine.py`. New file-output formatters should live in `formatters/`.
+- New adapter? → mirror `adapters/openalex.py` or `adapters/opencitations.py` (per-DOI) or `adapters/datacite_events.py` (prefix-capable). Add to `REGISTRY` in `adapters/__init__.py`. Add to `DEFAULT_SOURCES` only if it's enabled by default. Then add: a per-source table via a new migration in `store/migrations/`, an entry in `store.schema.SOURCE_TABLES`, and a per-source upsert function in `store.upsert.UPSERTERS`.
+- Public API change? → `api.py`. Keep entry points sync-wrapping `_run_to_store` / `_run_in_memory`. `find_citations_batch` and `find_citations_by_prefix` require `db_path`; `find_citations` accepts an optional one.
+- In-memory record schema change? → `schema.py` (LongRow / GroupedRecord). DOI fields are validated by `normalize_doi` at the boundary — keep that invariant.
+- Store schema change? → add a migration to `store/migrations/` (numbered, idempotent, declares `from_version` / `to_version`), bump `store.schema.CURRENT_SCHEMA_VERSION`, and update DDL constants in `store.schema`. **Never** edit an existing migration in-place after it has been released — write a new one.
+- Export format change? → `api.export_citations`. New formatters can live alongside it; the in-memory `formatters/` directory is reserved for future BibTeX/JSON output of grouped records.
 
 ## What not to do
 

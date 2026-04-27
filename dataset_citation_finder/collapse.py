@@ -1,4 +1,4 @@
-"""collapse_sources(): long-format DataFrame -> deduplicated per-edge view.
+"""collapse_citations_df(): long-format DataFrame -> deduplicated per-edge view.
 
 See design doc §7. Groups on (cited_doi, citing_doi) and produces:
     - sources: list[str] (unique, preserving first-seen order)
@@ -25,7 +25,7 @@ def _unique_preserve_order(values) -> list:
     return out
 
 
-def collapse_sources(df: pd.DataFrame) -> pd.DataFrame:
+def collapse_citations_df(df: pd.DataFrame) -> pd.DataFrame:
     """Collapse the long-format table to one row per (cited_doi, citing_doi).
 
     Parameters

@@ -2,7 +2,7 @@ from dataset_citation_finder import (
     find_citations,
     find_citations_batch,
     find_citations_by_prefix,
-    collapse_sources,
+    collapse_citations_df,
 )
 
 # Single DOI

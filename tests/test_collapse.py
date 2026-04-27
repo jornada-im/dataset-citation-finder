@@ -1,4 +1,4 @@
-"""Tests for collapse.collapse_sources()."""
+"""Tests for collapse.collapse_citations_df()."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import pytest
 
-from dataset_citation_finder.collapse import collapse_sources
+from dataset_citation_finder.collapse import collapse_citations_df
 
 
 def _row(cited, citing, source, relation=None, ts=None):
@@ -26,7 +26,7 @@ class TestCollapseSources:
         df = pd.DataFrame(columns=[
             "cited_doi", "citing_doi", "source", "relation_type", "retrieved_at"
         ])
-        out = collapse_sources(df)
+        out = collapse_citations_df(df)
         assert out.empty
         assert set(out.columns) == {
             "cited_doi", "citing_doi", "sources", "source_count",
@@ -38,7 +38,7 @@ class TestCollapseSources:
             _row("10.6073/a", "10.1038/b", "openalex"),
             _row("10.6073/a", "10.1038/c", "openalex"),
         ])
-        out = collapse_sources(df)
+        out = collapse_citations_df(df)
         assert len(out) == 2
         for _, r in out.iterrows():
             assert r["sources"] == ["openalex"]
@@ -51,7 +51,7 @@ class TestCollapseSources:
             _row("10.6073/a", "10.1038/b", "datacite_events", relation="is-cited-by"),
             _row("10.6073/a", "10.1038/b", "opencitations"),
         ])
-        out = collapse_sources(df)
+        out = collapse_citations_df(df)
         assert len(out) == 1
         row = out.iloc[0]
         assert set(row["sources"]) == {"openalex", "datacite_events", "opencitations"}
@@ -64,7 +64,7 @@ class TestCollapseSources:
             _row("10.6073/a", "10.1038/b", "datacite_events", relation="is-cited-by"),
             _row("10.6073/a", "10.1038/b", "datacite_events", relation="references"),
         ])
-        out = collapse_sources(df)
+        out = collapse_citations_df(df)
         assert len(out) == 1
         assert set(out.iloc[0]["relation_types"]) == {"is-cited-by", "references"}
 
@@ -75,13 +75,13 @@ class TestCollapseSources:
             _row("10.6073/a", "10.1038/b", "openalex", ts=late),
             _row("10.6073/a", "10.1038/b", "datacite_events", ts=early),
         ])
-        out = collapse_sources(df)
+        out = collapse_citations_df(df)
         assert out.iloc[0]["first_retrieved_at"] == early
 
     def test_missing_columns_raises(self):
         df = pd.DataFrame([{"cited_doi": "10.1/x"}])
         with pytest.raises(ValueError, match="missing required columns"):
-            collapse_sources(df)
+            collapse_citations_df(df)
 
     def test_different_cited_dois_not_merged(self):
         """Same citing_doi citing two different datasets -> two rows."""
@@ -89,5 +89,5 @@ class TestCollapseSources:
             _row("10.6073/a", "10.1038/b", "openalex"),
             _row("10.6073/x", "10.1038/b", "openalex"),
         ])
-        out = collapse_sources(df)
+        out = collapse_citations_df(df)
         assert len(out) == 2
