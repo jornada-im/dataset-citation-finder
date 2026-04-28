@@ -16,6 +16,7 @@ from .api import (
     read_citations,
     validate_dois,
 )
+from .api_keys import resolve_api_keys
 from .schema import GroupedRecord, LongRow
 from .store import (
     CURRENT_SCHEMA_VERSION,
@@ -30,6 +31,7 @@ __all__ = [
     "find_citations_batch",
     "find_citations_by_prefix",
     "validate_dois",
+    "resolve_api_keys",
     "coalesce_citations",
     "collapse_citations_df",
     "export_citations",

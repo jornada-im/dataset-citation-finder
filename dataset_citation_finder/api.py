@@ -28,6 +28,7 @@ import pandas as pd
 
 from .adapters import DEFAULT_SOURCES, REGISTRY
 from .adapters.base import SourceAdapter
+from .api_keys import resolve_api_keys
 from .collapse import collapse_citations_df
 from .engine import (
     StoreCollectResult,
@@ -122,6 +123,7 @@ def find_citations(
     sources: Iterable[str] | str = "all",
     output: str = "long",
     email: str | None = None,
+    api_keys: dict[str, str] | None = None,
     concurrency: int = 8,
     refresh_after: timedelta | None = None,
     force: bool = False,
@@ -134,21 +136,26 @@ def find_citations(
     Default behavior (no `db_path`): query and return an in-memory DataFrame
     (or grouped records). When `db_path` is given, also persist to that
     store and return a `RunSummary` instead.
+
+    `api_keys` is a dict mapping source-id to key (e.g., {'openalex': '...'}).
+    See `dataset_citation_finder.api_keys` for environment-variable fallbacks.
     """
     norm = normalize_doi(doi)
     if norm is None:
         raise ValueError(f"invalid DOI: {doi!r}")
+    keys = resolve_api_keys(api_keys)
 
     if db_path is None:
         return _run_in_memory(
             dois=[norm], prefix=None, sources=sources, output=output,
-            email=email, concurrency=concurrency, **adapter_opts,
+            email=email, api_keys=keys, concurrency=concurrency, **adapter_opts,
         )
     return _run_to_store(
         db_path=db_path, dois=[norm], prefix=None, input_kind="single",
-        input_value=norm, sources=sources, email=email, concurrency=concurrency,
-        refresh_after=refresh_after, force=force, coalesce=coalesce,
-        checkpoint_interval=checkpoint_interval, **adapter_opts,
+        input_value=norm, sources=sources, email=email, api_keys=keys,
+        concurrency=concurrency, refresh_after=refresh_after, force=force,
+        coalesce=coalesce, checkpoint_interval=checkpoint_interval,
+        **adapter_opts,
     )
 
 
@@ -162,6 +169,7 @@ def find_citations_batch(
     sources: Iterable[str] | str = "all",
     output: str = "long",
     email: str | None = None,
+    api_keys: dict[str, str] | None = None,
     concurrency: int = 8,
     refresh_after: timedelta | None = None,
     force: bool = False,
@@ -174,6 +182,9 @@ def find_citations_batch(
     Default behavior (no `db_path`): in-memory pipeline returning a
     long-format DataFrame (or grouped records). When `db_path` is given,
     persists to the store and returns a `RunSummary`.
+
+    `api_keys` is a dict mapping source-id to key. See
+    `dataset_citation_finder.api_keys` for environment-variable fallbacks.
     """
     normed: list[str] = []
     for d in dois:
@@ -184,6 +195,7 @@ def find_citations_batch(
         normed.append(n)
     if not normed:
         raise ValueError("no valid DOIs in input")
+    keys = resolve_api_keys(api_keys)
 
     if db_path is None:
         if len(normed) > _BATCH_NO_DB_RECOMMEND_THRESHOLD:
@@ -194,13 +206,14 @@ def find_citations_batch(
             )
         return _run_in_memory(
             dois=normed, prefix=None, sources=sources, output=output,
-            email=email, concurrency=concurrency, **adapter_opts,
+            email=email, api_keys=keys, concurrency=concurrency, **adapter_opts,
         )
     return _run_to_store(
         db_path=db_path, dois=normed, prefix=None, input_kind="batch",
-        input_value=None, sources=sources, email=email, concurrency=concurrency,
-        refresh_after=refresh_after, force=force, coalesce=coalesce,
-        checkpoint_interval=checkpoint_interval, **adapter_opts,
+        input_value=None, sources=sources, email=email, api_keys=keys,
+        concurrency=concurrency, refresh_after=refresh_after, force=force,
+        coalesce=coalesce, checkpoint_interval=checkpoint_interval,
+        **adapter_opts,
     )
 
 
@@ -210,6 +223,7 @@ def find_citations_by_prefix(
     *,
     sources: Iterable[str] | str = "all",
     email: str | None = None,
+    api_keys: dict[str, str] | None = None,
     concurrency: int = 8,
     cache_dir: str | None = None,
     refresh_after: timedelta | None = None,
@@ -222,16 +236,20 @@ def find_citations_by_prefix(
 
     Writes results into the SQLite store at `db_path` and returns a
     `RunSummary`.
+
+    `api_keys` is a dict mapping source-id to key. See
+    `dataset_citation_finder.api_keys` for environment-variable fallbacks.
     """
     if db_path is None:
         raise TypeError("find_citations_by_prefix requires a db_path")
     prefix = prefix.lower().rstrip("/")
+    keys = resolve_api_keys(api_keys)
     return _run_to_store(
         db_path=db_path, dois=None, prefix=prefix, input_kind="prefix",
-        input_value=prefix, sources=sources, email=email, concurrency=concurrency,
-        cache_dir=cache_dir, refresh_after=refresh_after, force=force,
-        coalesce=coalesce, checkpoint_interval=checkpoint_interval,
-        **adapter_opts,
+        input_value=prefix, sources=sources, email=email, api_keys=keys,
+        concurrency=concurrency, cache_dir=cache_dir,
+        refresh_after=refresh_after, force=force, coalesce=coalesce,
+        checkpoint_interval=checkpoint_interval, **adapter_opts,
     )
 
 
@@ -444,7 +462,9 @@ def _build_adapters(
     client,
     concurrency: int,
     adapter_opts: dict[str, Any],
+    api_keys: dict[str, str] | None = None,
 ) -> list[SourceAdapter]:
+    api_keys = api_keys or {}
     adapters: list[SourceAdapter] = []
     for sid in source_ids:
         cls = REGISTRY.get(sid)
@@ -455,6 +475,15 @@ def _build_adapters(
         kwargs: dict[str, Any] = {"concurrency": effective_concurrency}
         if sid == "datacite_events" and "relation_types" in adapter_opts:
             kwargs["relation_types"] = adapter_opts["relation_types"]
+        # Pass api_key only to adapters whose constructor accepts it. Inspect
+        # the signature so unknown adapters aren't broken by an unexpected kw.
+        if sid in api_keys:
+            try:
+                import inspect
+                if "api_key" in inspect.signature(cls.__init__).parameters:
+                    kwargs["api_key"] = api_keys[sid]
+            except (TypeError, ValueError):
+                pass
         adapters.append(cls(client, **kwargs))
     return adapters
 
@@ -512,6 +541,7 @@ def _run_in_memory(
     output: str,
     email: str | None,
     concurrency: int,
+    api_keys: dict[str, str] | None = None,
     cache_dir: str | None = None,
     **adapter_opts: Any,
 ) -> pd.DataFrame | list[GroupedRecord]:
@@ -519,7 +549,7 @@ def _run_in_memory(
 
     async def _pipeline():
         async with make_client(email=email) as client:
-            adapters = _build_adapters(source_ids, client, concurrency, adapter_opts)
+            adapters = _build_adapters(source_ids, client, concurrency, adapter_opts, api_keys=api_keys)
             if not adapters:
                 raise ValueError("no adapters resolved from requested sources")
             if prefix is not None:
@@ -554,6 +584,7 @@ def _run_to_store(
     force: bool,
     coalesce: bool,
     checkpoint_interval: int,
+    api_keys: dict[str, str] | None = None,
     cache_dir: str | None = None,
     **adapter_opts: Any,
 ) -> RunSummary:
@@ -586,7 +617,9 @@ def _run_to_store(
         async def _pipeline():
             nonlocal inputs_total, inputs_skipped
             async with make_client(email=email) as client:
-                adapters = _build_adapters(source_ids, client, concurrency, adapter_opts)
+                adapters = _build_adapters(
+                    source_ids, client, concurrency, adapter_opts, api_keys=api_keys,
+                )
                 if not adapters:
                     raise ValueError("no adapters resolved from requested sources")
 

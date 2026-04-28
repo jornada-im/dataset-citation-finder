@@ -63,6 +63,47 @@ df = find_citations("10.6073/pasta/abc123", email="you@example.org")
 `find_citations` returns a long-format DataFrame by default. Pass
 `db_path=...` to also write the result through to a SQLite store.
 
+### API keys (optional but recommended for OpenAlex and OpenCitations)
+
+Several sources offer free API keys that grant higher rate limits. Pass them
+explicitly:
+
+```python
+find_citations_batch(
+    dois,
+    db_path="store.sqlite",
+    email="you@example.org",
+    api_keys={
+        "openalex": "your-openalex-key",
+        "opencitations": "your-opencitations-token",
+    },
+)
+```
+
+Or set environment variables and the library picks them up automatically:
+
+```bash
+export OPENALEX_API_KEY=...
+export OPENCITATIONS_API_KEY=...
+export SEMANTIC_SCHOLAR_API_KEY=...
+```
+
+Recognized source-id → env var mappings live in
+`dataset_citation_finder.api_keys`. Inspect what would be picked up:
+
+```python
+from dataset_citation_finder import resolve_api_keys
+print(resolve_api_keys())
+```
+
+Adapters that don't take a key (DataCite Events) silently ignore entries
+in the dict.
+
+**How each key is sent.** OpenAlex uses an `api_key=...` query parameter on
+every request. OpenCitations uses an `authorization: <token>` header (bare
+token, no `Bearer ` prefix), per
+<https://api.opencitations.net/index/v2#description>.
+
 ### Build (or update) a SQLite store from a list of DOIs
 
 ```python

@@ -3,12 +3,19 @@
 https://opencitations.net/index/api/v2/citations/{doi}
 
 Simple per-DOI REST API that returns a JSON list of citation objects.
+
+Authentication: OpenCitations honors an opaque API token passed via the
+`authorization` request header (the bare token, no "Bearer" prefix). See
+https://api.opencitations.net/index/v2#description for details. A token
+raises rate limits substantially over anonymous access.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+
+import httpx
 
 from ..http_client import request_with_retry
 from ..schema import LongRow
@@ -25,13 +32,35 @@ class OpenCitationsAdapter(SourceAdapter):
     supports_batch = False
     # OpenCitations is a free service with low rate limits; keep concurrent
     # requests low and hold the slot briefly after each response to avoid
-    # triggering 429s on large prefix sweeps.
+    # triggering 429s on large prefix sweeps. Setting an api_key relaxes the
+    # limits but the conservative defaults stay safe either way.
     default_concurrency = 2
     inter_request_delay = 0.5  # seconds
 
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        concurrency: int = 8,
+        api_key: str | None = None,
+    ) -> None:
+        super().__init__(client, concurrency=concurrency)
+        self._api_key = api_key
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Headers injected on every request when an API key is set.
+
+        OpenCitations expects the bare token (no `Bearer ` prefix) in the
+        `authorization` header — see the API docs.
+        """
+        return {"authorization": self._api_key} if self._api_key else {}
+
     async def query_single(self, doi: str) -> AsyncIterator[LongRow]:
         url = f"{BASE_URL}/doi:{doi}"
-        resp = await request_with_retry(self._client, "GET", url)
+        resp = await request_with_retry(
+            self._client, "GET", url,
+            headers=self._auth_headers() or None,
+        )
         if resp.status_code == 404:
             return
         if resp.status_code >= 400:
