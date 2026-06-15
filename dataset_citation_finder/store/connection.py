@@ -10,18 +10,14 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
+from ..utils import utcnow_iso
 from .errors import MigrationRequired, SchemaVersionError, StoreFormatError
 from .migrations import discover_migrations
 from .schema import APPLICATION_ID, CURRENT_SCHEMA_VERSION, SOURCE_TABLES
 
 log = logging.getLogger(__name__)
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
 
 
 def _library_version() -> str:
@@ -138,7 +134,7 @@ def _initialize_new_store(conn: sqlite3.Connection) -> None:
 
         # Insert meta with the version reached so far; updated below.
         version = _library_version()
-        now = _utcnow_iso()
+        now = utcnow_iso()
         conn.execute(
             "INSERT INTO meta (schema_version, library_version, created_at, "
             "created_by, application_id) VALUES (?, ?, ?, ?, ?)",

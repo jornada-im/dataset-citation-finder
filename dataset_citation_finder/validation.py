@@ -14,7 +14,6 @@ import asyncio
 import logging
 import sqlite3
 from collections.abc import Iterable
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -25,6 +24,7 @@ from .store.upsert import (
     fetch_validation_freshness,
     set_validation_status,
 )
+from .utils import utcnow, utcnow_iso
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ async def _validate_one(
             "http_status": http_status,
             "validated_registrar": registrar,
             "notes": notes or None,
-            "validated_at": datetime.now(tz=timezone.utc).isoformat(),
+            "validated_at": utcnow_iso(),
         }
 
 
@@ -170,7 +170,7 @@ def filter_by_validation_freshness(
     """Skip DOIs whose `validated_at` is newer than now-refresh_after."""
     if force or refresh_after is None or not dois:
         return dois, 0
-    cutoff = (datetime.now(tz=timezone.utc) - refresh_after).isoformat()
+    cutoff = (utcnow() - refresh_after).isoformat()
     last = fetch_validation_freshness(conn, cited_dois=dois)
     kept = [d for d in dois if last.get(d, "") < cutoff]
     return kept, len(dois) - len(kept)

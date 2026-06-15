@@ -6,9 +6,20 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlparse
 
 log = logging.getLogger(__name__)
+
+
+def utcnow() -> datetime:
+    """Current time as a timezone-aware UTC datetime."""
+    return datetime.now(tz=timezone.utc)
+
+
+def utcnow_iso() -> str:
+    """Current UTC time as an ISO 8601 string (the store's timestamp format)."""
+    return utcnow().isoformat()
 
 _DOI_REGEX = re.compile(r"^10\.\d{4,9}/.+$")
 

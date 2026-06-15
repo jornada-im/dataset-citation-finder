@@ -20,7 +20,7 @@ import logging
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +54,7 @@ from .validation import (
     persist_validation_results,
     validate_dois_async,
 )
-from .utils import normalize_doi
+from .utils import normalize_doi, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -303,7 +303,7 @@ def validate_dois(
             "validated_registrar", "notes", "validated_at",
         ])
 
-    started_at = datetime.now(tz=timezone.utc)
+    started_at = utcnow()
     conn = open_store(db_path)
     try:
         run_id = insert_run(
@@ -346,7 +346,7 @@ def validate_dois(
                 conn.execute("ROLLBACK")
                 raise
 
-        finished_at = datetime.now(tz=timezone.utc)
+        finished_at = utcnow()
         finish_run(
             conn, run_id,
             sources_succeeded=["doi.org"],
@@ -521,7 +521,7 @@ def _filter_by_freshness(
     """
     if force or refresh_after is None or not dois:
         return dois, 0
-    cutoff = datetime.now(tz=timezone.utc) - refresh_after
+    cutoff = utcnow() - refresh_after
     cutoff_iso = cutoff.isoformat()
     last_seen = fetch_freshness(conn, cited_dois=dois, source=source)
     kept = [d for d in dois if last_seen.get(d, "") < cutoff_iso]
@@ -584,7 +584,7 @@ def _run_to_store(
     **adapter_opts: Any,
 ) -> RunSummary:
     source_ids = _resolve_sources(sources)
-    started_at = datetime.now(tz=timezone.utc)
+    started_at = utcnow()
     conn = open_store(db_path)
     try:
         # Determine input_count once we know the working set (for prefix this
@@ -687,7 +687,7 @@ def _run_to_store(
 
         asyncio.run(_pipeline())
 
-        finished_at = datetime.now(tz=timezone.utc)
+        finished_at = utcnow()
         finish_run(
             conn, run_id,
             sources_succeeded=result.succeeded,

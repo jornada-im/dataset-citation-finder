@@ -15,12 +15,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..schema import LongRow
+from ..utils import utcnow_iso
 
 log = logging.getLogger(__name__)
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
 
 
 def _ts(value: Any) -> str:
@@ -31,7 +28,7 @@ def _ts(value: Any) -> str:
         return value.isoformat()
     if isinstance(value, str):
         return value
-    return _utcnow_iso()
+    return utcnow_iso()
 
 
 # ---- runs ---------------------------------------------------------------
@@ -49,7 +46,7 @@ def insert_run(
         "INSERT INTO runs (started_at, input_kind, input_value, input_count, "
         "sources_requested) VALUES (?, ?, ?, ?, ?)",
         (
-            _utcnow_iso(),
+            utcnow_iso(),
             input_kind,
             input_value,
             input_count,
@@ -71,7 +68,7 @@ def finish_run(
         "UPDATE runs SET finished_at = ?, sources_succeeded = ?, "
         "rows_written = ?, notes = ? WHERE run_id = ?",
         (
-            _utcnow_iso(),
+            utcnow_iso(),
             json.dumps(list(sources_succeeded)),
             rows_written,
             notes,
@@ -95,7 +92,7 @@ def upsert_cited_dois(
     (enumerated under a prefix), or 'validation' (added by validate_dois
     against an externally-supplied list).
     """
-    now = _utcnow_iso()
+    now = utcnow_iso()
     conn.executemany(
         "INSERT INTO cited_dois ("
         "  cited_doi, first_seen_at, first_seen_run_id, "
@@ -225,7 +222,7 @@ def bump_queried_dois(
     run_id: int,
 ) -> None:
     """Record that we just queried these (cited_doi, source) pairs."""
-    now = _utcnow_iso()
+    now = utcnow_iso()
     conn.executemany(
         "INSERT INTO queried_dois (cited_doi, source, last_queried_at, last_run_id) "
         "VALUES (?, ?, ?, ?) "

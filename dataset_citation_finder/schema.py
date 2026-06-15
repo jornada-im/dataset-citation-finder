@@ -13,16 +13,12 @@ Two shapes:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from .utils import normalize_doi
-
-
-def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+from .utils import normalize_doi, utcnow
 
 
 class LongRow(BaseModel):
@@ -35,7 +31,7 @@ class LongRow(BaseModel):
     citing_doi: str
     source: str
     relation_type: str | None = None
-    retrieved_at: datetime = Field(default_factory=_utcnow)
+    retrieved_at: datetime = Field(default_factory=utcnow)
     # Free-form adapter-specific metadata; kept out of the default table but
     # retained so formatters / downstream users can reach it if they want.
     extra: dict[str, Any] = Field(default_factory=dict)
