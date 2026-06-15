@@ -45,6 +45,11 @@ class OpenAlexAdapter(SourceAdapter):
     ) -> None:
         super().__init__(client, concurrency=concurrency)
         self._api_key = api_key
+        if api_key:
+            log.info("openalex: api_key attached (len=%d, ...%s)",
+                     len(api_key), api_key[-4:])
+        else:
+            log.info("openalex: no api_key (polite pool only)")
 
     def _auth_params(self) -> dict[str, str]:
         """Query params injected on every request when an API key is set."""
@@ -60,6 +65,7 @@ class OpenAlexAdapter(SourceAdapter):
             return
         if resp.status_code >= 400:
             log.warning("openalex: HTTP %d resolving %s", resp.status_code, doi)
+            self._mark_failed(doi)
             return
 
         work = resp.json()
@@ -82,6 +88,7 @@ class OpenAlexAdapter(SourceAdapter):
             resp = await request_with_retry(self._client, "GET", WORKS_URL, params=params)
             if resp.status_code >= 400:
                 log.warning("openalex: HTTP %d listing citers of %s", resp.status_code, doi)
+                self._mark_failed(doi)
                 return
             body = resp.json()
             for item in body.get("results", []):

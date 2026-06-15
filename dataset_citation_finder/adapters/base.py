@@ -39,6 +39,20 @@ class SourceAdapter(abc.ABC):
     def __init__(self, client: httpx.AsyncClient, *, concurrency: int = 8) -> None:
         self._client = client
         self._semaphore = asyncio.Semaphore(concurrency)
+        # DOIs whose per-DOI query failed (transport error, exhausted retries,
+        # or HTTP >= 400 other than 404). The engine reads + clears this after
+        # each query_batch call so failed DOIs aren't marked "queried" — they
+        # need to be re-tried on the next run.
+        self._failed_dois: set[str] = set()
+
+    def _mark_failed(self, doi: str) -> None:
+        self._failed_dois.add(doi)
+
+    def take_failed_dois(self) -> set[str]:
+        """Return and clear the set of DOIs that failed since the last call."""
+        out = self._failed_dois
+        self._failed_dois = set()
+        return out
 
     @abc.abstractmethod
     async def query_single(self, doi: str) -> AsyncIterator[LongRow]:
@@ -64,6 +78,7 @@ class SourceAdapter(abc.ABC):
                         rows.append(row)
                 except Exception:
                     log.exception("%s: query_single(%s) failed", self.source_id, doi)
+                    self._mark_failed(doi)
                 if self.inter_request_delay > 0:
                     await asyncio.sleep(self.inter_request_delay)
                 return rows

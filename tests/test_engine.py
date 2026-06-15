@@ -25,6 +25,7 @@ class FakeAdapter(SourceAdapter):
         self.supports_batch = False
         self._fixture = fixture  # {"per_doi": {doi: [rows]}, "prefix": {prefix: [rows]}}
         self._raises = raises
+        self._failed_dois: set[str] = set()
         import asyncio
         self._semaphore = asyncio.Semaphore(8)
 

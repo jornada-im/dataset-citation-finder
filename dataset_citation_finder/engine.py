@@ -156,12 +156,27 @@ async def collect_to_store(
             result.errors_per_source[sid] = repr(e)
             # Don't return — record what we did write.
 
+        # Per-DOI failures (transport errors after retry exhaustion, or HTTP
+        # >= 400 other than 404) must NOT mark the DOI as queried — otherwise
+        # a later run with refresh_after would skip it permanently. Adapters
+        # report these via the base-class `take_failed_dois` channel.
+        failed = adapter.take_failed_dois() if hasattr(adapter, "take_failed_dois") else set()
         if dois_list is not None:
-            bump_queried_dois(conn, cited_dois=dois_list, source=sid, run_id=run_id)
+            successful = [d for d in dois_list if d not in failed]
+            if successful:
+                bump_queried_dois(conn, cited_dois=successful, source=sid, run_id=run_id)
+            if failed:
+                log.warning(
+                    "%s: %d of %d DOIs failed; not bumping queried_dois for "
+                    "those (will be retried next run)",
+                    sid, len(failed), len(dois_list),
+                )
         elif observed_cited:
             bump_queried_dois(conn, cited_dois=observed_cited, source=sid, run_id=run_id)
 
         result.rows_per_source[sid] = rows_written
+        if failed and sid not in result.errors_per_source:
+            result.errors_per_source[sid] = f"{len(failed)} per-DOI failure(s)"
         if sid not in result.errors_per_source:
             result.succeeded.append(sid)
 

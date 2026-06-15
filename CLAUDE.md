@@ -28,6 +28,7 @@ Four layers: **source adapters → SQLite store → coalesce → exporters.** Ad
 - `adapters.opencitations.OpenCitationsAdapter` — full per-DOI
 - `adapters.openalex.OpenAlexAdapter` — full, with DOI → work-ID resolution and cursor pagination
 - Public API: `find_citations`, `find_citations_batch`, `find_citations_by_prefix`, `validate_dois`, `coalesce_citations`, `read_citations`, `export_citations`, `open_store`, `describe_store`, `collapse_citations_df`. `find_citations` and `find_citations_batch` accept an optional `db_path` (without it: in-memory DataFrame). `find_citations_by_prefix` requires `db_path`. `validate_dois` is decoupled from the citation pipeline and persists results into `cited_dois` (latest status) and `doi_validations` (audit log).
+- `api_keys.resolve_api_keys` — merges an explicit `api_keys={"openalex": ..., "opencitations": ...}` dict with `<SOURCE>_API_KEY` env-var fallbacks (explicit wins); resolved keys are passed to adapter constructors via `api_key`. Currently wired for OpenAlex (`api_key` query param) and OpenCitations (`authorization` header, no `Bearer` prefix).
 
 **Stubs that raise `NotImplementedError`:**
 - `adapters.stubs.SemanticScholarAdapter`
@@ -53,7 +54,10 @@ From design doc §14:
 
 - **DataCite Events `page_size=1000` causes read timeouts on prefix sweeps.** EDI's `10.6073` prefix has tens of thousands of citation events. At 1000 events/page, response generation can exceed 30s and trigger `httpx.ReadTimeout`. **For now leave `page_size` at 1000, but bumped `DEFAULT_TIMEOUT` to 60s.** Both should be exposed through the public API in a follow-up.
 - **`enumeration.py` `page_size` is unrelated** — that endpoint returns small uniform rows and is not the bottleneck. Leave at 1000.
+- **OpenCitations adapter must call `api.opencitations.net`, not `opencitations.net`.** The legacy `opencitations.net/index/api/v2/...` path 301-redirects to the canonical `api.opencitations.net` host, and httpx drops the `Authorization` header on cross-host redirects — silently sending API-keyed requests as anonymous. `BASE_URL` already points at the canonical host; don't revert it.
+- **`http_client.RetryPolicy.max_retry_after` (120s) caps how long we'll honor a server's `Retry-After`.** OpenAlex IP-level throttling has been observed to return `Retry-After` values up to ~19h; honoring that literally would stall a sweep indefinitely. Past the cap, the 429/503 response is surfaced to the caller instead of sleeping.
 - **Resume semantics live in the store now.** Each `(cited_doi, source)` pair queried bumps `queried_dois.last_queried_at`; passing `refresh_after=timedelta(...)` to a re-run skips pairs queried within the window. An interrupted run rolls back the per-run transaction (so writes are atomic per call) but re-running is the recovery path — there is no separate checkpoint file.
+- **Per-DOI failures don't count as "queried."** If an adapter's `query_single` raises, or the response is HTTP >= 400 (other than 404), the base class records the DOI via `_mark_failed` / `take_failed_dois()`. The engine excludes those DOIs from `bump_queried_dois`, so a failed DOI is retried on the next run even if it falls inside the `refresh_after` window.
 - **Adapter ordering in API layer is sequential per-source** — within `_run_to_store`, prefix-capable adapters run before per-DOI adapters, and per-DOI adapters are dispatched one at a time so the freshness filter can be applied per-source. If a single source stalls, that source's portion of the run stalls; others run normally if dispatched first.
 
 ## Decisions worth knowing about
@@ -67,6 +71,7 @@ These are settled but nontrivial — see design §13 for full reasoning.
 - **Canonical output is a SQLite store.** Per-source raw tables + a coalesced `citations` table; CSV / Parquet are derived via `export_citations`. The store stamps `application_id = 0x44434646` plus a `meta` row with `schema_version` and `library_version`, so re-opening a foreign or older file is safe (raises `StoreFormatError` / `SchemaVersionError`, or auto-migrates).
 - **`cited_dois` is separate from `queried_dois`.** `cited_dois` is the in-scope DOI registry — every DOI the user submitted as input or that prefix enumeration surfaced, regardless of whether any source returned citations for it. `queried_dois` is the per-`(cited_doi, source)` freshness ledger that drives `refresh_after`. The "uncited DOIs" question is `LEFT JOIN cited_dois LEFT JOIN citations`.
 - **DOI validation is opt-in and decoupled.** `validate_dois` is a separate function; the citation entry points never call it. Validation results persist into `cited_dois.validation_status` (latest) and `doi_validations` (per-event audit log).
+- **API keys: explicit dict beats env vars, per source.** `find_citations*` / `validate_dois` accept `api_keys={...}`; `api_keys.resolve_api_keys` fills in any missing sources from `OPENALEX_API_KEY`, `OPENCITATIONS_API_KEY`, `SEMANTIC_SCHOLAR_API_KEY`, `DIMENSIONS_API_KEY`. Adapters that don't take a key (DataCite Events) silently ignore entries in the dict.
 
 ## Project conventions
 
@@ -105,6 +110,7 @@ python -c "from dataset_citation_finder import find_citations_batch; \
 - In-memory record schema change? → `schema.py` (LongRow / GroupedRecord). DOI fields are validated by `normalize_doi` at the boundary — keep that invariant.
 - Store schema change? → add a migration to `store/migrations/` (numbered, idempotent, declares `from_version` / `to_version`), bump `store.schema.CURRENT_SCHEMA_VERSION`, and update DDL constants in `store.schema`. **Never** edit an existing migration in-place after it has been released — write a new one.
 - Export format change? → `api.export_citations`. New formatters can live alongside it; the in-memory `formatters/` directory is reserved for future BibTeX/JSON output of grouped records.
+- About to run a real prefix sweep (e.g. against EDI)? → `docs/user_guide.md` has the practical first-run checklist (`email`, `cache_dir`, expected runtime, `sources=` to silence stub warnings).
 
 ## What not to do
 

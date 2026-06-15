@@ -1,8 +1,13 @@
 """OpenCitations Index v2 adapter.
 
-https://opencitations.net/index/api/v2/citations/{doi}
+https://api.opencitations.net/index/v2/citations/{doi}
 
 Simple per-DOI REST API that returns a JSON list of citation objects.
+
+Note: the older `opencitations.net/index/api/v2/...` path 301-redirects to
+the canonical `api.opencitations.net/index/v2/...`. httpx strips the
+`Authorization` header across hosts by default, so calling the legacy URL
+silently drops the API token. We always call the canonical host directly.
 
 Authentication: OpenCitations honors an opaque API token passed via the
 `authorization` request header (the bare token, no "Bearer" prefix). See
@@ -23,7 +28,7 @@ from .base import SourceAdapter
 
 log = logging.getLogger(__name__)
 
-BASE_URL = "https://opencitations.net/index/api/v2/citations"
+BASE_URL = "https://api.opencitations.net/index/v2/citations"
 
 
 class OpenCitationsAdapter(SourceAdapter):
@@ -46,6 +51,11 @@ class OpenCitationsAdapter(SourceAdapter):
     ) -> None:
         super().__init__(client, concurrency=concurrency)
         self._api_key = api_key
+        if api_key:
+            log.info("opencitations: api_key attached (len=%d, ...%s)",
+                     len(api_key), api_key[-4:])
+        else:
+            log.info("opencitations: no api_key (anonymous tier)")
 
     def _auth_headers(self) -> dict[str, str]:
         """Headers injected on every request when an API key is set.
@@ -65,6 +75,7 @@ class OpenCitationsAdapter(SourceAdapter):
             return
         if resp.status_code >= 400:
             log.warning("opencitations: HTTP %d for %s", resp.status_code, doi)
+            self._mark_failed(doi)
             return
 
         records = resp.json()

@@ -248,3 +248,51 @@ python -m pytest
 - `citations` — coalesced canonical edges, with `sources` and `relation_types` as JSON arrays
 
 See design doc §7.2 for the full DDL.
+
+## Session notes (2026-06-10): OpenAlex backfill for `edi_citations_20260428b.sqlite`
+
+`edi_citations_20260428b.sqlite` already had DataCite Events and OpenCitations
+data for the EDI `10.6073` prefix, but `source_openalex` was still empty. We
+started backfilling it with an OpenAlex API key for higher rate limits:
+
+```python
+from dataset_citation_finder import find_citations_by_prefix
+
+summary = find_citations_by_prefix(
+    "10.6073",
+    db_path="edi_citations_20260428b.sqlite",
+    sources=["openalex"],
+    email="gregmaurer@gmail.com",
+    cache_dir="~/.cache/dcf",
+)
+```
+
+with `OPENALEX_API_KEY` set in the environment (see "API keys" above).
+
+**Status when stopped (to shut down the machine):**
+- Prefix enumeration completed: 92,193 DOIs under `10.6073`, cached at
+  `~/.cache/dcf/prefix_10.6073.json` (24h TTL).
+- OpenAlex fan-out was ~17.5k requests in (roughly ~9% of the ~184k requests
+  expected for full coverage — about two requests per DOI) when the process
+  was stopped.
+
+**To resume:** just re-run the same `find_citations_by_prefix` call above.
+The run was interrupted mid-adapter, so `queried_dois` was never bumped for
+`source="openalex"` — the resumed run will reprocess all 92,193 DOIs from
+scratch, but this is safe and expected: `source_openalex` upserts are keyed
+on `(cited_doi, citing_doi)`, so re-fetched rows overwrite in place rather
+than duplicating. The enumeration cache means the resumed run skips straight
+to the OpenAlex fan-out. Expect several hours total for the full prefix at
+the observed ~10-12 req/s.
+
+**Environment note:** the checked-in `.venv` in this sandbox has unreadable
+interpreter symlinks (`Permission denied`), so we ran the backfill from a
+throwaway venv instead:
+
+```bash
+python3 -m venv /tmp/dcfvenv
+/tmp/dcfvenv/bin/pip install -e .
+```
+
+`/tmp/dcfvenv` won't survive a machine restart — recreate it (or fix
+`.venv`) before resuming.

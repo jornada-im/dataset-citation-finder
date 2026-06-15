@@ -22,6 +22,7 @@ class TrackingAdapter(SourceAdapter):
         self.supports_prefix = False
         self.supports_batch = False
         self._semaphore = asyncio.Semaphore(concurrency)
+        self._failed_dois: set[str] = set()
         self._sleep = sleep
         self.called_for: list[str] = []
         self.concurrent_peak = 0

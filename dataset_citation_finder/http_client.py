@@ -27,6 +27,12 @@ class RetryPolicy:
     max_attempts: int = 5
     base_delay: float = 1.0  # seconds
     max_delay: float = 30.0
+    # Hard ceiling on how long we'll honor a server-supplied Retry-After.
+    # Some APIs (notably OpenAlex when an IP has been throttled) return
+    # multi-hour values that would stall a sweep indefinitely. When the
+    # server asks for more than this we surface the response to the caller
+    # instead of sleeping.
+    max_retry_after: float = 120.0
     retry_on_status: tuple[int, ...] = (429, 500, 502, 503, 504)
 
     def delay_for(self, attempt: int) -> float:
@@ -83,9 +89,21 @@ async def request_with_retry(
         if attempt == retry.max_attempts:
             return resp  # surface the final response to the caller
 
-        # Honor Retry-After when present.
+        # Honor Retry-After when present, but cap it. A server asking us to
+        # sleep for hours (OpenAlex IP cooldowns reach ~19h) would stall the
+        # whole pipeline; in that case we give up and surface the 429 so the
+        # caller can decide what to do.
         ra = resp.headers.get("Retry-After")
-        delay = float(ra) if ra and ra.isdigit() else retry.delay_for(attempt)
+        ra_seconds = float(ra) if ra and ra.replace(".", "", 1).isdigit() else None
+        if ra_seconds is not None and ra_seconds > retry.max_retry_after:
+            log.warning(
+                "status %d on %s %s (attempt %d); server requested "
+                "Retry-After=%.0fs which exceeds cap=%.0fs — giving up",
+                resp.status_code, method, url, attempt,
+                ra_seconds, retry.max_retry_after,
+            )
+            return resp
+        delay = ra_seconds if ra_seconds is not None else retry.delay_for(attempt)
         log.warning("status %d on %s %s (attempt %d); retrying in %.1fs",
                     resp.status_code, method, url, attempt, delay)
         await asyncio.sleep(delay)
