@@ -475,15 +475,10 @@ def _build_adapters(
         kwargs: dict[str, Any] = {"concurrency": effective_concurrency}
         if sid == "datacite_events" and "relation_types" in adapter_opts:
             kwargs["relation_types"] = adapter_opts["relation_types"]
-        # Pass api_key only to adapters whose constructor accepts it. Inspect
-        # the signature so unknown adapters aren't broken by an unexpected kw.
-        if sid in api_keys:
-            try:
-                import inspect
-                if "api_key" in inspect.signature(cls.__init__).parameters:
-                    kwargs["api_key"] = api_keys[sid]
-            except (TypeError, ValueError):
-                pass
+        # Forward a resolved key only to adapters that authenticate. Others
+        # (e.g. DataCite Events) silently ignore any entry in the dict.
+        if cls.accepts_api_key and sid in api_keys:
+            kwargs["api_key"] = api_keys[sid]
         adapters.append(cls(client, **kwargs))
     return adapters
 

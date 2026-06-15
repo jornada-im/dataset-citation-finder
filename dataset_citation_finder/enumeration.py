@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from .http_client import request_with_retry
+from .utils import datacite_next_cursor
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class PrefixEnumerator:
                 doi = item.get("id") or (item.get("attributes") or {}).get("doi")
                 if doi:
                     dois.append(doi.lower())
-            cursor = self._next_cursor(body)
+            cursor = datacite_next_cursor(body)
 
         self._write_cache(prefix, dois)
         return dois
@@ -95,14 +96,3 @@ class PrefixEnumerator:
             path.write_text(json.dumps({"ts": time.time(), "dois": dois}))
         except OSError as e:
             log.warning("prefix cache: failed to write %s: %s", path, e)
-
-    @staticmethod
-    def _next_cursor(body: dict) -> str | None:
-        from urllib.parse import parse_qs, urlparse
-        links = body.get("links") or {}
-        next_url = links.get("next")
-        if not next_url:
-            return None
-        qs = parse_qs(urlparse(next_url).query)
-        cursors = qs.get("page[cursor]")
-        return cursors[0] if cursors else None

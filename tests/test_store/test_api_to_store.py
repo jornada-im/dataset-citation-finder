@@ -18,7 +18,6 @@ import pytest
 
 from dataset_citation_finder import (
     RunSummary,
-    coalesce_citations,
     describe_store,
     find_citations,
     find_citations_batch,

@@ -38,6 +38,28 @@ def _response_body(events, next_url=None):
 class TestDataCiteEventsAdapter:
 
     @pytest.mark.asyncio
+    async def test_query_single_uses_doi_url_form_for_filters(self, make_mock_client):
+        """`obj-id`/`subj-id` filters must be the full `https://doi.org/<doi>`
+        form — the DataCite Events API matches nothing on a bare DOI."""
+        seen_params = []
+
+        def handler(request):
+            seen_params.append(dict(request.url.params))
+            return httpx.Response(200, json=_response_body([]))
+
+        client = make_mock_client(handler)
+        adapter = DataCiteEventsAdapter(client)
+        rows = [r async for r in adapter.query_single("10.6073/pasta/abc")]
+        assert rows == []
+        assert any(
+            p.get("obj-id") == "https://doi.org/10.6073/pasta/abc" for p in seen_params
+        )
+        assert any(
+            p.get("subj-id") == "https://doi.org/10.6073/pasta/abc" for p in seen_params
+        )
+        await client.aclose()
+
+    @pytest.mark.asyncio
     async def test_subject_side_query_normalizes_direction(self, make_mock_client):
         """For `is-cited-by`: subj-id is the dataset, obj-id is the citer."""
         def handler(request):

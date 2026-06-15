@@ -35,15 +35,33 @@ class SourceAdapter(abc.ABC):
     # Minimum pause held inside the semaphore after each request completes.
     # Prevents bursty patterns when responses are fast.
     inter_request_delay: float = 0.0
+    # Set True on adapters that authenticate with an API key. Controls whether
+    # the engine forwards a resolved key (see api._build_adapters) and whether
+    # the base constructor logs key status. Adapters read the key as
+    # `self._api_key`; how it's sent (query param, header, ...) is adapter-specific.
+    accepts_api_key: bool = False
 
-    def __init__(self, client: httpx.AsyncClient, *, concurrency: int = 8) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        concurrency: int = 8,
+        api_key: str | None = None,
+    ) -> None:
         self._client = client
         self._semaphore = asyncio.Semaphore(concurrency)
+        self._api_key = api_key
         # DOIs whose per-DOI query failed (transport error, exhausted retries,
         # or HTTP >= 400 other than 404). The engine reads + clears this after
         # each query_batch call so failed DOIs aren't marked "queried" — they
         # need to be re-tried on the next run.
         self._failed_dois: set[str] = set()
+        if self.accepts_api_key:
+            if api_key:
+                log.info("%s: api_key attached (len=%d, ...%s)",
+                         self.source_id, len(api_key), api_key[-4:])
+            else:
+                log.info("%s: no api_key (unauthenticated)", self.source_id)
 
     def _mark_failed(self, doi: str) -> None:
         self._failed_dois.add(doi)

@@ -19,8 +19,6 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
-import httpx
-
 from ..http_client import request_with_retry
 from ..schema import LongRow
 from ..utils import normalize_doi
@@ -35,21 +33,16 @@ class OpenAlexAdapter(SourceAdapter):
     source_id = "openalex"
     supports_prefix = False
     supports_batch = False
-
-    def __init__(
-        self,
-        client: httpx.AsyncClient,
-        *,
-        concurrency: int = 8,
-        api_key: str | None = None,
-    ) -> None:
-        super().__init__(client, concurrency=concurrency)
-        self._api_key = api_key
-        if api_key:
-            log.info("openalex: api_key attached (len=%d, ...%s)",
-                     len(api_key), api_key[-4:])
-        else:
-            log.info("openalex: no api_key (polite pool only)")
+    # OpenAlex enforces a per-IP/per-key rate limit (~10 req/s); each DOI
+    # costs at least 2 requests (resolve + first cited-by page, more with
+    # pagination). High concurrency with no inter-request delay bursts past
+    # that limit and triggers 429s. Observed IP-level throttling can return
+    # Retry-After values up to ~19h (see http_client.RetryPolicy.max_retry_after),
+    # so prevention is cheaper than retrying. An api_key raises the ceiling
+    # but doesn't remove it; keep the conservative defaults either way.
+    default_concurrency = 2
+    inter_request_delay = 0.5  # seconds
+    accepts_api_key = True
 
     def _auth_params(self) -> dict[str, str]:
         """Query params injected on every request when an API key is set."""

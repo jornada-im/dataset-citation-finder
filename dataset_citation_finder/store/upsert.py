@@ -158,6 +158,45 @@ def append_doi_validation(
     )
 
 
+# SQLite's default host-parameter limit is 999; chunk IN (...) lookups below it.
+_IN_CHUNK = 500
+
+
+def _fetch_latest_by_doi(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    value_column: str,
+    dois: Iterable[str],
+    extra_where: str = "",
+    extra_params: tuple = (),
+) -> dict[str, str]:
+    """Return {cited_doi: value_column} for the requested DOIs.
+
+    Looks up `value_column` from `table` keyed on `cited_doi`, chunking the
+    `IN (...)` clause to stay under SQLite's parameter limit. `extra_where`
+    (with its `extra_params`) is ANDed before the DOI filter. DOIs with no
+    matching row are absent from the result. `table`/`value_column`/
+    `extra_where` are internal literals, never caller-supplied.
+    """
+    dois = list(dois)
+    if not dois:
+        return {}
+    where_prefix = f"{extra_where} AND " if extra_where else ""
+    out: dict[str, str] = {}
+    for i in range(0, len(dois), _IN_CHUNK):
+        batch = dois[i : i + _IN_CHUNK]
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"SELECT cited_doi, {value_column} FROM {table} "
+            f"WHERE {where_prefix}cited_doi IN ({placeholders})",
+            (*extra_params, *batch),
+        ).fetchall()
+        for r in rows:
+            out[r["cited_doi"]] = r[value_column]
+    return out
+
+
 def fetch_validation_freshness(
     conn: sqlite3.Connection,
     *,
@@ -167,23 +206,13 @@ def fetch_validation_freshness(
 
     DOIs without a `validated_at` timestamp are absent from the result.
     """
-    cited_dois = list(cited_dois)
-    if not cited_dois:
-        return {}
-    out: dict[str, str] = {}
-    chunk = 500
-    for i in range(0, len(cited_dois), chunk):
-        batch = cited_dois[i : i + chunk]
-        placeholders = ",".join("?" for _ in batch)
-        rows = conn.execute(
-            f"SELECT cited_doi, validated_at FROM cited_dois "
-            f"WHERE validated_at IS NOT NULL "
-            f"AND cited_doi IN ({placeholders})",
-            tuple(batch),
-        ).fetchall()
-        for r in rows:
-            out[r["cited_doi"]] = r["validated_at"]
-    return out
+    return _fetch_latest_by_doi(
+        conn,
+        table="cited_dois",
+        value_column="validated_at",
+        dois=cited_dois,
+        extra_where="validated_at IS NOT NULL",
+    )
 
 
 # ---- queried_dois -------------------------------------------------------
@@ -217,23 +246,14 @@ def fetch_freshness(
 
     DOIs not present in `queried_dois` are absent from the result.
     """
-    cited_dois = list(cited_dois)
-    if not cited_dois:
-        return {}
-    # SQLite parameter-limit-safe chunking.
-    out: dict[str, str] = {}
-    chunk = 500
-    for i in range(0, len(cited_dois), chunk):
-        batch = cited_dois[i : i + chunk]
-        placeholders = ",".join("?" for _ in batch)
-        rows = conn.execute(
-            f"SELECT cited_doi, last_queried_at FROM queried_dois "
-            f"WHERE source = ? AND cited_doi IN ({placeholders})",
-            (source, *batch),
-        ).fetchall()
-        for r in rows:
-            out[r["cited_doi"]] = r["last_queried_at"]
-    return out
+    return _fetch_latest_by_doi(
+        conn,
+        table="queried_dois",
+        value_column="last_queried_at",
+        dois=cited_dois,
+        extra_where="source = ?",
+        extra_params=(source,),
+    )
 
 
 # ---- per-source upserts -------------------------------------------------

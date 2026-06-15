@@ -20,8 +20,6 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
-import httpx
-
 from ..http_client import request_with_retry
 from ..schema import LongRow
 from .base import SourceAdapter
@@ -41,21 +39,7 @@ class OpenCitationsAdapter(SourceAdapter):
     # limits but the conservative defaults stay safe either way.
     default_concurrency = 2
     inter_request_delay = 0.5  # seconds
-
-    def __init__(
-        self,
-        client: httpx.AsyncClient,
-        *,
-        concurrency: int = 8,
-        api_key: str | None = None,
-    ) -> None:
-        super().__init__(client, concurrency=concurrency)
-        self._api_key = api_key
-        if api_key:
-            log.info("opencitations: api_key attached (len=%d, ...%s)",
-                     len(api_key), api_key[-4:])
-        else:
-            log.info("opencitations: no api_key (anonymous tier)")
+    accepts_api_key = True
 
     def _auth_headers(self) -> dict[str, str]:
         """Headers injected on every request when an API key is set.

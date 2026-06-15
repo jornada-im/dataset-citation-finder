@@ -17,14 +17,15 @@ from .stubs import (
     SemanticScholarAdapter,
 )
 
-# Default adapter set (see design §4.1).
-# Dimensions is auto-added when credentials are detected (handled in api.py).
-# Google Scholar is opt-in only.
+# Default adapter set (see design §4.1): only sources that are actually
+# implemented. The stubs (semantic_scholar, crossref) stay in REGISTRY so they
+# can be opted into explicitly, but they're not run by default — they'd only
+# raise NotImplementedError and pollute every run's errors_per_source. Add a
+# stub back here when it's built. Dimensions is auto-added when credentials are
+# detected (handled in api.py); Google Scholar is opt-in only.
 DEFAULT_SOURCES: tuple[str, ...] = (
     "datacite_events",
     "openalex",
-    "semantic_scholar",
-    "crossref",
     "opencitations",
 )
 

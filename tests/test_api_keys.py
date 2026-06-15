@@ -7,7 +7,7 @@ import pytest
 
 from dataset_citation_finder import resolve_api_keys
 from dataset_citation_finder.adapters.opencitations import OpenCitationsAdapter
-from dataset_citation_finder.adapters.openalex import OpenAlexAdapter, WORKS_URL
+from dataset_citation_finder.adapters.openalex import OpenAlexAdapter
 
 
 class TestResolveApiKeys:
@@ -150,4 +150,7 @@ class TestApiBuildAdapters:
         dce = next(a for a in adapters if a.source_id == "datacite_events")
         assert oa._api_key == "oa-key"
         assert oc._api_key == "oc-key"
-        assert not hasattr(dce, "_api_key")
+        # DataCite doesn't authenticate: the key in the dict is ignored and
+        # never reaches the adapter (every adapter has `_api_key`, None here).
+        assert dce.accepts_api_key is False
+        assert dce._api_key is None

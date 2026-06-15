@@ -16,7 +16,7 @@ from typing import Any
 
 from ..http_client import request_with_retry
 from ..schema import LongRow
-from ..utils import normalize_doi
+from ..utils import datacite_next_cursor, normalize_doi
 from .base import SourceAdapter
 
 log = logging.getLogger(__name__)
@@ -81,10 +81,15 @@ class DataCiteEventsAdapter(SourceAdapter):
         SUBJECT-side relations (`is-cited-by`, `is-referenced-by`,
         `is-supplement-to`). Both yield `LongRow`s with `cited_doi=<doi>`
         regardless of which side the event recorded the dataset on.
+
+        `obj-id`/`subj-id` filters require the full `https://doi.org/<doi>`
+        form — a bare DOI matches nothing.
         """
+        doi_url = _doi_url(doi)
+
         # Dataset is on obj-id: relations cites / references / is-supplemented-by.
         async for event in self._paginate({
-            "obj-id": doi,
+            "obj-id": doi_url,
             "relation-type-id": self._object_side_filter(),
         }):
             row = self._event_to_row(event, side="object")
@@ -93,7 +98,7 @@ class DataCiteEventsAdapter(SourceAdapter):
 
         # Dataset is on subj-id: relations is-cited-by / is-referenced-by / is-supplement-to.
         async for event in self._paginate({
-            "subj-id": doi,
+            "subj-id": doi_url,
             "relation-type-id": self._subject_side_filter(),
         }):
             row = self._event_to_row(event, side="subject")
@@ -159,7 +164,7 @@ class DataCiteEventsAdapter(SourceAdapter):
             body = resp.json()
             for event in body.get("data", []):
                 yield event
-            cursor = _next_cursor(body)
+            cursor = datacite_next_cursor(body)
 
     def _event_to_row(
         self,
@@ -213,23 +218,14 @@ class DataCiteEventsAdapter(SourceAdapter):
 
 # ---- helpers ------------------------------------------------------------
 
+def _doi_url(doi: str) -> str:
+    """Render a normalized DOI as the `https://doi.org/<doi>` form required
+    by the `obj-id`/`subj-id` query filters."""
+    return f"https://doi.org/{doi}"
+
+
 def _extract_doi(val: Any) -> str | None:
     """DataCite event ids may be bare DOIs or doi.org URLs. Normalize."""
     if not isinstance(val, str):
         return None
     return normalize_doi(val)
-
-
-def _next_cursor(body: dict) -> str | None:
-    """Extract the next-page cursor from a DataCite JSON:API response."""
-    links = body.get("links") or {}
-    next_url = links.get("next")
-    if not next_url:
-        return None
-    # The `next` link embeds page[cursor]=...; parse it out.
-    from urllib.parse import parse_qs, urlparse
-    qs = parse_qs(urlparse(next_url).query)
-    cursors = qs.get("page[cursor]")
-    if not cursors:
-        return None
-    return cursors[0]

@@ -20,7 +20,6 @@ from typing import Any
 import httpx
 
 from .http_client import RetryPolicy, request_with_retry
-from .schema import LongRow  # for type proximity only
 from .store.upsert import (
     append_doi_validation,
     fetch_validation_freshness,

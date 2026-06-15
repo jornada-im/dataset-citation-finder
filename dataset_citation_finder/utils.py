@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import re
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 log = logging.getLogger(__name__)
 
@@ -52,3 +52,17 @@ def normalize_doi(raw: str | None) -> str | None:
         return None
 
     return s
+
+
+def datacite_next_cursor(body: dict) -> str | None:
+    """Extract the next-page cursor from a DataCite JSON:API response.
+
+    DataCite (both /events and /dois) paginates via a `links.next` URL that
+    embeds `page[cursor]=...`. Returns the cursor value, or None when there is
+    no next page.
+    """
+    next_url = (body.get("links") or {}).get("next")
+    if not next_url:
+        return None
+    cursors = parse_qs(urlparse(next_url).query).get("page[cursor]")
+    return cursors[0] if cursors else None

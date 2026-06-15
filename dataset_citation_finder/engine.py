@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 

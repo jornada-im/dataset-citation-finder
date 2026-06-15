@@ -7,8 +7,6 @@ schema_version back to 1 plus dropping the v2 tables.
 
 from __future__ import annotations
 
-import pytest
-
 from dataset_citation_finder import (
     CURRENT_SCHEMA_VERSION,
     open_store,
