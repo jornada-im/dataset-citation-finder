@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -230,6 +231,7 @@ def find_citations_by_prefix(
     force: bool = False,
     coalesce: bool = True,
     checkpoint_interval: int = 500,
+    progress: bool = True,
     **adapter_opts: Any,
 ) -> RunSummary:
     """Find citations for every DOI under a DOI prefix.
@@ -239,6 +241,10 @@ def find_citations_by_prefix(
 
     `api_keys` is a dict mapping source-id to key. See
     `dataset_citation_finder.api_keys` for environment-variable fallbacks.
+
+    `progress` (default True) prints a few status lines to stderr as each
+    discrete task starts/finishes (DOI enumeration, then each source query).
+    Pass `progress=False` to silence them.
     """
     if db_path is None:
         raise TypeError("find_citations_by_prefix requires a db_path")
@@ -249,7 +255,8 @@ def find_citations_by_prefix(
         input_value=prefix, sources=sources, email=email, api_keys=keys,
         concurrency=concurrency, cache_dir=cache_dir,
         refresh_after=refresh_after, force=force, coalesce=coalesce,
-        checkpoint_interval=checkpoint_interval, **adapter_opts,
+        checkpoint_interval=checkpoint_interval, progress=progress,
+        **adapter_opts,
     )
 
 
@@ -451,6 +458,19 @@ def export_citations(
 
 # ---- internal -----------------------------------------------------------
 
+# Human-readable names for progress messages (see `progress=` on
+# find_citations_by_prefix). Falls back to the raw source_id.
+_SOURCE_DISPLAY = {
+    "datacite_events": "DataCite Events",
+    "openalex": "OpenAlex",
+    "opencitations": "OpenCitations",
+}
+
+
+def _display_source(sid: str) -> str:
+    return _SOURCE_DISPLAY.get(sid, sid)
+
+
 def _resolve_sources(sources: Iterable[str] | str) -> list[str]:
     if sources == "all":
         return list(DEFAULT_SOURCES)
@@ -581,9 +601,16 @@ def _run_to_store(
     checkpoint_interval: int,
     api_keys: dict[str, str] | None = None,
     cache_dir: str | None = None,
+    progress: bool = False,
     **adapter_opts: Any,
 ) -> RunSummary:
     source_ids = _resolve_sources(sources)
+
+    def _say(msg: str) -> None:
+        """Emit a low-volume status line to stderr when progress is enabled."""
+        if progress:
+            print(msg, file=sys.stderr, flush=True)
+
     started_at = utcnow()
     conn = open_store(db_path)
     try:
@@ -623,12 +650,18 @@ def _run_to_store(
                     non_prefix = [a for a in adapters if not a.supports_prefix]
 
                     if prefix_adapters:
+                        for a in prefix_adapters:
+                            _say(f"Querying {_display_source(a.source_id)} "
+                                 f"(prefix sweep of {prefix})…")
                         sub = await collect_to_store(
                             prefix_adapters, conn,
                             run_id=run_id, prefix=prefix,
                             checkpoint_interval=checkpoint_interval,
                         )
                         _merge_results(result, sub)
+                        for a in prefix_adapters:
+                            _say(f"  {_display_source(a.source_id)}: "
+                                 f"{sub.rows_per_source.get(a.source_id, 0)} citation rows.")
                         # Record any cited DOIs the prefix-native query
                         # surfaced (DataCite Events on prefix returns rows
                         # without our needing to enumerate first).
@@ -640,9 +673,11 @@ def _run_to_store(
                             )
 
                     if non_prefix:
+                        _say(f"Fetching DOIs under prefix {prefix} from DataCite…")
                         enumerator = PrefixEnumerator(client, cache_dir=cache_dir)
                         enumerated = await enumerator.enumerate(prefix)
                         log.info("prefix %s: %d DOIs enumerated", prefix, len(enumerated))
+                        _say(f"  {len(enumerated)} DOIs in scope.")
                         # Record the enumerated set in cited_dois — the
                         # exhaustive in-scope list, including DOIs that no
                         # adapter returns citations for.
@@ -652,6 +687,7 @@ def _run_to_store(
                                 origin=f"prefix:{prefix}", run_id=run_id,
                             )
                         for adapter in non_prefix:
+                            name = _display_source(adapter.source_id)
                             kept, skipped = _filter_by_freshness(
                                 conn, dois=enumerated,
                                 source=adapter.source_id,
@@ -659,12 +695,17 @@ def _run_to_store(
                             )
                             inputs_skipped += skipped
                             if not kept:
+                                _say(f"{name}: all {len(enumerated)} DOIs "
+                                     f"already fresh, skipping.")
                                 continue
+                            _say(f"Querying {name} for {len(kept)} DOIs…")
                             sub = await collect_to_store(
                                 [adapter], conn, run_id=run_id, dois=kept,
                                 checkpoint_interval=checkpoint_interval,
                             )
                             _merge_results(result, sub)
+                            _say(f"  {name}: "
+                                 f"{sub.rows_per_source.get(adapter.source_id, 0)} citation rows.")
                         inputs_total = len(enumerated)
                     else:
                         inputs_total = 0
