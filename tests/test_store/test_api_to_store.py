@@ -241,6 +241,64 @@ class TestFindCitationsSingleWithDb:
         assert isinstance(df, pd.DataFrame)
 
 
+class FlakyOpenAlex(base_module.SourceAdapter):
+    """Completes every DOI except '…/c', on which it raises BudgetExhausted
+    until `budget_ok` is flipped — simulating the daily cap and next-day reset.
+    default_concurrency=1 makes processing order deterministic.
+    """
+
+    source_id = "openalex"
+    default_concurrency = 1
+    budget_ok = False
+
+    async def query_single(self, doi: str) -> AsyncIterator[LongRow]:
+        if not FlakyOpenAlex.budget_ok and doi.endswith("/c"):
+            raise base_module.BudgetExhausted("daily cap")
+        yield LongRow(
+            cited_doi=doi, citing_doi="10.1038/oa-cited",
+            source=self.source_id, extra={"openalex_id": "W1"},
+        )
+
+
+def _queried(db, source):
+    conn = open_store(db)
+    try:
+        rows = conn.execute(
+            "SELECT cited_doi FROM queried_dois WHERE source = ? ORDER BY cited_doi",
+            (source,),
+        ).fetchall()
+        return {r["cited_doi"] for r in rows}
+    finally:
+        conn.close()
+
+
+class TestBudgetExhaustedResume:
+    """A daily-cap stop leaves un-finished DOIs out of queried_dois; a re-run
+    (with refresh_after) resumes exactly those."""
+
+    def test_stop_then_resume_next_run(self, monkeypatch, tmp_path):
+        monkeypatch.setitem(REGISTRY, "openalex", FlakyOpenAlex)
+        FlakyOpenAlex.budget_ok = False
+        db = tmp_path / "store.sqlite"
+        dois = ["10.6073/a", "10.6073/b", "10.6073/c", "10.6073/d"]
+
+        # Run 1: cap hit on '…/c'. a, b complete; c (trigger) and d
+        # (un-attempted) are left for next run.
+        find_citations_batch(dois, db, sources=["openalex"])
+        assert _queried(db, "openalex") == {"10.6073/a", "10.6073/b"}
+
+        # Run 2 (next day): budget restored. refresh_after skips the two fresh
+        # DOIs and re-queries only the un-bumped c and d.
+        FlakyOpenAlex.budget_ok = True
+        find_citations_batch(
+            dois, db, sources=["openalex"], refresh_after=timedelta(days=1),
+        )
+        assert _queried(db, "openalex") == {
+            "10.6073/a", "10.6073/b", "10.6073/c", "10.6073/d",
+        }
+        FlakyOpenAlex.budget_ok = False  # reset shared class state
+
+
 class TestReadCitations:
 
     def test_coalesced_view(self, fake_registry, tmp_path):

@@ -23,6 +23,17 @@ from ..schema import LongRow
 log = logging.getLogger(__name__)
 
 
+class BudgetExhausted(Exception):
+    """An adapter hit a hard, run-spanning quota (e.g. OpenAlex's daily
+    request cap, which resets at midnight UTC).
+
+    Raised from `query_single` to tell `query_batch` to stop dispatching the
+    rest of the batch. Every DOI that did not finish is marked failed (so it
+    is excluded from `queried_dois` and retried on the next run); see the
+    cross-day resume notes in docs/user_guide.md.
+    """
+
+
 class SourceAdapter(abc.ABC):
     """Abstract base for all source adapters."""
 
@@ -85,15 +96,32 @@ class SourceAdapter(abc.ABC):
 
         Default implementation: concurrent per-DOI calls bounded by the
         adapter's semaphore. Adapters with native batching override this.
+
+        If a `query_single` raises `BudgetExhausted` (a run-spanning quota was
+        hit), the whole batch stops: the triggering DOI and every DOI not yet
+        attempted are marked failed so they are excluded from `queried_dois`
+        and retried next run. At most `concurrency` already-in-flight calls
+        finish before the stop takes effect.
         """
         dois = list(dois)
+        stop = asyncio.Event()
 
         async def _run_one(doi: str) -> list[LongRow]:
+            if stop.is_set():
+                self._mark_failed(doi)  # un-attempted; retry next run
+                return []
             async with self._semaphore:
+                if stop.is_set():       # quota hit while we waited for a slot
+                    self._mark_failed(doi)
+                    return []
                 rows: list[LongRow] = []
                 try:
                     async for row in self.query_single(doi):
                         rows.append(row)
+                except BudgetExhausted:
+                    stop.set()              # halt the rest of the batch
+                    self._mark_failed(doi)  # this DOI did not finish
+                    return []               # discard partials (idempotent re-fetch)
                 except Exception:
                     log.exception("%s: query_single(%s) failed", self.source_id, doi)
                     self._mark_failed(doi)

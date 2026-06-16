@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from dataset_citation_finder.adapters.base import SourceAdapter
+from dataset_citation_finder.adapters.base import BudgetExhausted, SourceAdapter
 from dataset_citation_finder.schema import LongRow
 
 
@@ -73,6 +73,42 @@ class TestQueryBatchFanout:
         rows = [r async for r in adapter.query_batch([])]
         assert rows == []
         assert adapter.called_for == []
+
+    @pytest.mark.asyncio
+    async def test_budget_exhausted_stops_batch_and_fails_unattempted(self):
+        """When query_single raises BudgetExhausted, the batch stops: the
+        triggering DOI and every un-attempted DOI are marked failed; DOIs that
+        already completed are not."""
+
+        class BudgetAdapter(SourceAdapter):
+            source_id = "budget"
+
+            def __init__(self, *, fail_on):
+                self.supports_prefix = False
+                self.supports_batch = False
+                self._semaphore = asyncio.Semaphore(1)  # serialize for determinism
+                self._failed_dois = set()
+                self._fail_on = fail_on
+                self.completed = []
+
+            async def query_single(self, doi):
+                if doi == self._fail_on:
+                    raise BudgetExhausted("cap")
+                self.completed.append(doi)
+                yield LongRow(
+                    cited_doi=doi,
+                    citing_doi=f"10.1234/citer-{doi.split('/')[-1]}",
+                    source=self.source_id,
+                )
+
+        adapter = BudgetAdapter(fail_on="10.6073/c")
+        dois = ["10.6073/a", "10.6073/b", "10.6073/c", "10.6073/d", "10.6073/e"]
+        rows = [r async for r in adapter.query_batch(dois)]
+        # Only a and b completed (with concurrency=1, processed in order).
+        assert adapter.completed == ["10.6073/a", "10.6073/b"]
+        assert len(rows) == 2
+        # The trigger plus everything un-attempted is failed (-> retried next run).
+        assert adapter.take_failed_dois() == {"10.6073/c", "10.6073/d", "10.6073/e"}
 
     @pytest.mark.asyncio
     async def test_inter_request_delay_is_honored(self):

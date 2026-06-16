@@ -59,18 +59,20 @@ class TestOpenAlexAdapterAuth:
 
         def handler(request):
             seen_params.append(dict(request.url.params))
-            # Resolve-DOI step.
+            # Resolve step (/works/doi:…): return one cited work so a listing
+            # request also fires.
             if "/works/doi:" in str(request.url):
-                return httpx.Response(200, json={"id": "https://openalex.org/W123"})
-            # Listing step — return empty so we exit immediately.
+                return httpx.Response(200, json={
+                    "id": "https://openalex.org/W123", "cited_by_count": 1,
+                })
+            # Citers listing step — empty so we exit immediately.
             return httpx.Response(200, json={"results": [], "meta": {"next_cursor": None}})
 
         client = make_mock_client(handler)
         adapter = OpenAlexAdapter(client, api_key="my-secret-key")
-        # Drain the generator.
         rows = [r async for r in adapter.query_single("10.1234/abc")]
         assert rows == []
-        # Both the resolve-DOI request and the citers request must include the key.
+        # Both the resolve and the citers requests must include the key.
         assert all(p.get("api_key") == "my-secret-key" for p in seen_params), seen_params
         assert len(seen_params) >= 2
         await client.aclose()
@@ -82,12 +84,15 @@ class TestOpenAlexAdapterAuth:
         def handler(request):
             seen_params.append(dict(request.url.params))
             if "/works/doi:" in str(request.url):
-                return httpx.Response(200, json={"id": "https://openalex.org/W123"})
+                return httpx.Response(200, json={
+                    "id": "https://openalex.org/W123", "cited_by_count": 1,
+                })
             return httpx.Response(200, json={"results": [], "meta": {"next_cursor": None}})
 
         client = make_mock_client(handler)
         adapter = OpenAlexAdapter(client)  # no api_key
         _ = [r async for r in adapter.query_single("10.1234/abc")]
+        assert seen_params  # at least the resolve request happened
         assert all("api_key" not in p for p in seen_params), seen_params
         await client.aclose()
 
