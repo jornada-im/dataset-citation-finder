@@ -37,18 +37,44 @@ Not yet implemented:
 
 ## Install
 
-```bash
-pip install -e .
-```
-
-Optional extras:
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
+A checked-in `uv.lock` pins exact versions, so `uv` installs are reproducible.
 
 ```bash
-pip install -e ".[parquet]"    # pyarrow for Parquet export
-pip install -e ".[bibtex]"     # bibtexparser (once BibTeX export is added)
-pip install -e ".[progress]"   # tqdm progress bars
-pip install -e ".[dev]"        # pytest, pytest-asyncio
+# 1. Install uv (one-time). See the uv docs for other methods.
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Create a virtualenv and install the locked dependencies.
+uv sync
+
+# 3. Run things inside the managed environment — no activation needed.
+uv run pytest
+uv run python -c "from dataset_citation_finder import find_citations; print(find_citations)"
 ```
+
+`uv sync` is declarative: each invocation makes the environment match exactly
+the extras you pass, so list every extra you want in one command.
+
+```bash
+uv sync --extra dev                    # pytest, pytest-asyncio (to run the tests)
+uv sync --extra dev --extra parquet    # multiple extras at once
+uv sync --all-extras                   # everything (parquet, bibtex, progress, gscholar, dev)
+```
+
+Add a new dependency with `uv add <package>` (updates both `pyproject.toml` and
+`uv.lock`); use `uv add --optional <extra> <package>` to add it to an extra.
+
+### Prefer pip?
+
+The package is a standard editable install:
+
+```bash
+pip install -e .               # core only
+pip install -e ".[dev]"        # with the dev extra
+```
+
+Available extras: `parquet` (pyarrow), `bibtex` (bibtexparser, once BibTeX
+export lands), `progress` (tqdm), `gscholar` (scholarly), `dev` (pytest).
 
 ## Usage
 
