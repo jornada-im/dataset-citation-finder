@@ -4,8 +4,10 @@ Two tables:
 
     citations  one row per (cited_doi, citing_doi, source, relation_type),
                with when we first and last saw it
-    queried    when each (cited_doi, source) pair was last successfully
-               queried; this is what `refresh_after` checks
+    queried    one row per (cited_doi, source) for every DOI ever passed to
+               find_citations, with when that source last answered for it
+               (`queried_at`, empty if it never has); `refresh_after`
+               checks this
 
 Results are committed after every DOI, so an interrupted run loses at most
 one DOI's work and re-running picks up where it stopped.
@@ -19,7 +21,7 @@ from pathlib import Path
 
 import pandas as pd
 
-STORE_VERSION = 1
+STORE_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS citations (
@@ -34,9 +36,26 @@ CREATE TABLE IF NOT EXISTS citations (
 CREATE TABLE IF NOT EXISTS queried (
     cited_doi   TEXT NOT NULL,
     source      TEXT NOT NULL,
-    queried_at  TEXT NOT NULL,
+    queried_at  TEXT,
     PRIMARY KEY (cited_doi, source)
 );
+"""
+
+# Version 1 required `queried_at`, so input DOIs that hadn't been answered
+# yet couldn't be recorded. SQLite can't relax NOT NULL in place, so rebuild.
+_UPGRADE_FROM_1 = """
+BEGIN;
+ALTER TABLE queried RENAME TO queried_v1;
+CREATE TABLE queried (
+    cited_doi   TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    queried_at  TEXT,
+    PRIMARY KEY (cited_doi, source)
+);
+INSERT INTO queried SELECT cited_doi, source, queried_at FROM queried_v1;
+DROP TABLE queried_v1;
+PRAGMA user_version = 2;
+COMMIT;
 """
 
 
@@ -60,6 +79,8 @@ def open_store(path: str | Path, *, create: bool = True) -> sqlite3.Connection:
     if version == 0 and not has_tables:
         conn.executescript(_SCHEMA)
         conn.execute(f"PRAGMA user_version = {STORE_VERSION}")
+    elif version == 1:
+        conn.executescript(_UPGRADE_FROM_1)
     elif version != STORE_VERSION:
         conn.close()
         raise StoreError(
@@ -68,6 +89,15 @@ def open_store(path: str | Path, *, create: bool = True) -> sqlite3.Connection:
             "Use a new db_path, or delete the file and re-run."
         )
     return conn
+
+
+def record_dois(conn: sqlite3.Connection, dois: list[str], sources: list[str]) -> None:
+    """Add input DOIs to `queried` (with no `queried_at`) if they aren't there."""
+    with conn:
+        conn.executemany(
+            "INSERT INTO queried VALUES (?, ?, NULL) ON CONFLICT DO NOTHING",
+            [(doi, source) for doi in dois for source in sources],
+        )
 
 
 def dois_to_query(conn: sqlite3.Connection, dois: list[str], source: str,
@@ -104,3 +134,8 @@ def save(conn: sqlite3.Connection, source: str, doi: str, rows: list[dict]) -> N
 def read_rows(conn: sqlite3.Connection) -> pd.DataFrame:
     """Every stored row, one per (cited_doi, citing_doi, source, relation_type)."""
     return pd.read_sql_query("SELECT * FROM citations", conn)
+
+
+def read_queried(conn: sqlite3.Connection) -> pd.DataFrame:
+    """Every DOI in scope, one row per source, with when it was last answered."""
+    return pd.read_sql_query("SELECT * FROM queried ORDER BY cited_doi, source", conn)

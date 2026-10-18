@@ -230,6 +230,70 @@ class TestWithStore:
             read_citations(tmp_path / "nope.sqlite")
 
 
+class TestQueriedTable:
+
+    def test_every_input_doi_recorded_per_source(self, fakes, tmp_path):
+        _, oa, _ = fakes
+        oa.citers["10.1000/b"] = httpx.ConnectError("down")
+        db = tmp_path / "c.sqlite"
+        find_citations(["10.1000/a", "10.1000/b", "10.1000/none"], db_path=db,
+                       sources=["datacite_events", "openalex"], progress=False)
+        q = read_citations(db, table="queried")
+        assert list(q.columns) == ["cited_doi", "source", "queried_at"]
+        assert len(q) == 6  # 3 DOIs x 2 sources, cited or not
+        answered = q.dropna(subset=["queried_at"])
+        assert set(zip(q.cited_doi, q.source)) - set(zip(answered.cited_doi, answered.source)) \
+            == {("10.1000/b", "openalex")}  # the failure stays unanswered
+        # Answered (by at least one source) but absent from citations = uncited.
+        # 10.1000/b counts: DataCite answered for it and found nothing.
+        assert set(answered.cited_doi) - set(read_citations(db).cited_doi) \
+            == {"10.1000/b", "10.1000/none"}
+
+    def test_unanswered_doi_is_queried_despite_refresh_after(self, fakes, tmp_path):
+        """A DOI recorded but never answered (e.g. the run was interrupted
+        before reaching it) must not count as fresh."""
+        _, oa, _ = fakes
+        db = tmp_path / "c.sqlite"
+        conn = api.store.open_store(db)
+        api.store.record_dois(conn, ["10.1000/a"], ["openalex"])
+        conn.close()
+        find_citations("10.1000/a", db_path=db, sources=["openalex"],
+                       refresh_after=timedelta(days=30), progress=False)
+        assert oa.calls == ["10.1000/a"]
+
+    def test_default_table_is_citations(self, fakes, tmp_path):
+        db = tmp_path / "c.sqlite"
+        df = find_citations("10.1000/a", db_path=db, progress=False)
+        assert read_citations(db).equals(read_citations(db, table="citations"))
+        assert read_citations(db).equals(df)
+        with pytest.raises(ValueError, match="table must be"):
+            read_citations(db, table="runs")
+
+    def test_upgrades_version_1_store(self, fakes, tmp_path):
+        db = tmp_path / "v1.sqlite"
+        with sqlite3.connect(db) as conn:
+            conn.executescript("""
+                CREATE TABLE citations (cited_doi TEXT NOT NULL, citing_doi TEXT NOT NULL,
+                    source TEXT NOT NULL, relation_type TEXT NOT NULL DEFAULT '',
+                    first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+                    PRIMARY KEY (cited_doi, citing_doi, source, relation_type));
+                CREATE TABLE queried (cited_doi TEXT NOT NULL, source TEXT NOT NULL,
+                    queried_at TEXT NOT NULL, PRIMARY KEY (cited_doi, source));
+                INSERT INTO citations VALUES ('10.1000/a', '10.9999/old', 'openalex', '',
+                    '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00');
+                INSERT INTO queried VALUES ('10.1000/a', 'openalex', '2026-01-01T00:00:00+00:00');
+                PRAGMA user_version = 1;
+            """)
+        find_citations(["10.1000/a", "10.1000/b"], db_path=db, sources=["openalex"],
+                       progress=False)
+        q = read_citations(db, table="queried")
+        assert set(q.cited_doi) == {"10.1000/a", "10.1000/b"}
+        assert q.queried_at.notna().all()
+        assert "10.9999/old" in set(read_citations(db).citing_doi)  # old rows kept
+        with sqlite3.connect(db) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+
+
 class TestDoisUnderPrefix:
 
     def test_pages_through_datacite(self, mock_client, monkeypatch):

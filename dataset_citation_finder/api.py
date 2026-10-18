@@ -85,7 +85,11 @@ def find_citations(
 
     say = _printer(progress)
     if db_path is not None:
-        store.open_store(db_path).close()  # create or check the file up front
+        conn = store.open_store(db_path)  # create or check the file up front
+        try:
+            store.record_dois(conn, dois, sources)
+        finally:
+            conn.close()
     started = store.now()
 
     # Each source runs in its own thread, so a run takes as long as the
@@ -187,15 +191,30 @@ def _query_source(
     return found, failed
 
 
-def read_citations(db_path: str | Path, *, raw: bool = False) -> pd.DataFrame:
-    """Load everything saved in a store, without querying any database.
+def read_citations(
+    db_path: str | Path,
+    *,
+    table: str = "citations",
+    raw: bool = False,
+) -> pd.DataFrame:
+    """Load what's saved in a store, without querying any database.
 
-    Returns the same columns as `find_citations`. With `raw=True`, returns
-    one row per (cited_doi, citing_doi, source, relation_type) instead, with
-    `first_seen` and `last_seen` timestamps.
+    table="citations" (the default) returns the same columns as
+    `find_citations`. With `raw=True`, it returns one row per (cited_doi,
+    citing_doi, source, relation_type) instead, with `first_seen` and
+    `last_seen` timestamps.
+
+    table="queried" returns every DOI ever passed to `find_citations`, one
+    row per source, with `queried_at`: when that source last answered for
+    the DOI, or empty if it never has (it failed, or the run was stopped).
+    DOIs with an answer but no rows in "citations" are uncited.
     """
+    if table not in ("citations", "queried"):
+        raise ValueError(f'table must be "citations" or "queried", not {table!r}')
     conn = store.open_store(db_path, create=False)
     try:
+        if table == "queried":
+            return store.read_queried(conn)
         rows = store.read_rows(conn)
     finally:
         conn.close()

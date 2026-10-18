@@ -8,10 +8,12 @@ EDI scope or prefix.
 - **Always use `db_path` and `refresh_after`.** Results are saved after every
   DOI, so an interrupted run loses almost nothing, and re-running the same
   call resumes it.
-- **Expect hours, not minutes.** The three databases are queried in
-  parallel, but each one is asked about one DOI at a time. DataCite is
-  usually the slowest, at roughly 1–3 seconds per DOI, so 7,500 DOIs take
-  about 2–6 hours. It's fine to stop and resume.
+- **Expect a long run.** The three databases are queried in parallel, but
+  each one is asked about one DOI at a time, and DataCite (two requests per
+  DOI) is usually the slowest. Most of the time is spent waiting for
+  responses, so speed depends mainly on your internet connection. On a slow
+  home network, expect up to a few seconds per DOI, so thousands of DOIs can
+  take hours. It's fine to stop and resume.
 - **Save prefix listings.** `dois_under_prefix("10.6073")` makes hundreds of
   requests. Write the list to a file and reuse it until you want to pick up
   newly registered DOIs.
