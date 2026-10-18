@@ -6,37 +6,26 @@ import httpx
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    """Make retry backoff and per-source delays instant. Returns the list of
+    requested sleep durations so tests can assert on them."""
+    calls: list[float] = []
+    monkeypatch.setattr("time.sleep", calls.append)
+    return calls
+
+
 @pytest.fixture
-def make_mock_client():
-    """Factory returning an httpx.AsyncClient wired to a user-supplied handler.
-
-    Usage in a test:
-
-        def handler(request):
-            return httpx.Response(200, json={...})
-
-        client = make_mock_client(handler)
-    """
+def mock_client():
+    """Factory: `mock_client(handler)` returns an httpx.Client whose requests
+    go to `handler(request) -> httpx.Response` instead of the network."""
     clients = []
 
-    def _factory(handler):
-        transport = httpx.MockTransport(handler)
-        client = httpx.AsyncClient(transport=transport, base_url="http://mocked")
+    def _factory(handler, **kwargs):
+        client = httpx.Client(transport=httpx.MockTransport(handler), **kwargs)
         clients.append(client)
         return client
 
     yield _factory
-
-    # Teardown: close any clients that weren't closed in the test.
-    import asyncio
-
-    async def _close_all():
-        for c in clients:
-            if not c.is_closed:
-                await c.aclose()
-
-    try:
-        asyncio.get_event_loop().run_until_complete(_close_all())
-    except RuntimeError:
-        # No running loop / event loop closed — fine.
-        pass
+    for c in clients:
+        c.close()

@@ -2,6 +2,12 @@
 
 *Single consolidated design document. Supersedes the earlier `.docx` design.*
 
+> **Historical (v0.3).** v0.4 simplified the library: no asyncio, no adapter
+> classes or migrations, no `find_citations_batch` / `find_citations_by_prefix`
+> / `export_citations`, and a two-table optional store. The reasoning about
+> sources, relation types and provenance below still applies. For the current
+> design, see `README.md` and `CLAUDE.md`.
+
 ## 1. Overview
 
 The **Dataset Citation Finder** is a Python library for discovering academic papers that cite a given dataset. It accepts a full DOI, a list of DOIs, or a DOI prefix (e.g., `10.6073/*` to sweep an entire dataset family such as the Environmental Data Initiative's catalog); queries multiple scholarly and citation-graph services; and persists results into a **SQLite database** with per-source provenance preserved.

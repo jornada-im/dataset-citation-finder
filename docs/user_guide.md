@@ -1,99 +1,64 @@
+# Running large lists (thousands of DOIs)
 
-## First run of `find_citations_by_prefix`
+The README covers the basics. These notes are for big runs, such as a whole
+EDI scope or prefix.
 
-Before you try find_citations_by_prefix against a real DOI prefix:
+- **Pass `email="..."`.** DataCite, OpenAlex and CrossRef ask clients to
+  identify themselves, and anonymous clients get less tolerance.
+- **Always use `db_path` and `refresh_after`.** Results are saved after every
+  DOI, so an interrupted run loses almost nothing, and re-running the same
+  call resumes it.
+- **Expect hours, not minutes.** The three databases are queried in
+  parallel, but each one is asked about one DOI at a time. DataCite is
+  usually the slowest, at roughly 1–3 seconds per DOI, so 7,500 DOIs take
+  about 2–6 hours. It's fine to stop and resume.
+- **Save prefix listings.** `dois_under_prefix("10.6073")` makes hundreds of
+  requests. Write the list to a file and reuse it until you want to pick up
+  newly registered DOIs.
 
-  - Pass email="..." — DataCite's polite-pool tolerance for
-  unidentified clients on prefix queries is much lower than
-  for per-DOI queries.
-  - Pass cache_dir="~/.cache/dcf" — PrefixEnumerator caches
-  the DOI list for 24h. Without a cache_dir the enumeration is
-   re-fetched on every run, which for EDI's 10.6073 is
-  hundreds of paginated requests.
-  - Expect a slow first run — for a large prefix like 10.6073,
-   DataCite Events' prefix-native query and OpenCitations'
-  per-DOI fanout dominate runtime; OpenCitationsAdapter is
-  throttled to default_concurrency=2 with a 0.5s inter-request
-   delay (per the operational notes in CLAUDE.md, this avoids
-  429s on long sweeps).
-  - The default source set is the three implemented adapters
-  (datacite_events, openalex, opencitations); the Semantic
-  Scholar and CrossRef stubs are not run by default. Pass
-  sources=[...] only to narrow further or to opt into a stub.
-  - Resumability — if the run is interrupted, the per-run
-  transaction rolls back, but cited_dois upserts from the
-  enumeration (which happens before adapter dispatch) are
-  committed earlier in the transaction lifecycle. Re-invoking
-  with refresh_after=timedelta(days=1) will skip pairs already
-   processed.
-
-  A reasonable first invocation:
-
-  from dataset_citation_finder import find_citations_by_prefix
-  summary = find_citations_by_prefix(
-      "10.6073",
-      db_path="edi_citations.sqlite",
-      sources=["datacite_events", "openalex",
-  "opencitations"],
-      email="gmaurer@nmsu.com",
-      cache_dir="~/.cache/dcf",
-  )
-
-
-    summary = find_citations_by_prefix("10.6073",
-        db_path="edi_citations_20260615.sqlite",
-        sources=["datacite_events", "openalex","opencitations"],
-        api_keys={"openalex":<"key">, "opencitations":<"key">},
-        email="gmaurer@nmsu.com",
-        cache_dir="~/.cache/dcf"
-    )
-
-  print(summary)
-
-  If you want to dry-run on a smaller prefix first to validate
-   the pipeline end-to-end, 10.5281/zenodo (Zenodo) and
-  10.5061/dryad (Dryad) are both valid registrant prefixes —
-  though 10.5281 and 10.5061 are the actual DOI prefixes (the
-  registrant level), so try those.
-
-## OpenAlex daily budget and multi-day resume
-
-OpenAlex enforces a **daily request budget** (it resets at midnight UTC), and
-a full sweep of a large prefix like EDI's `10.6073` can exhaust it in a single
-run. Two things to know:
-
-- **Set an OpenAlex API key.** The daily budget with a key is far larger than
-  without one. Pass `api_keys={"openalex": "..."}` or set `OPENALEX_API_KEY`
-  in the environment. This alone may be enough for smaller prefixes.
-
-- **When the budget is hit, the run stops the OpenAlex phase cleanly** rather
-  than hammering the API with doomed requests. It logs a warning like
-  `openalex: daily request budget exhausted (HTTP 429) … resets in ~NNNNNs`,
-  finishes the other sources, and returns normally. Every OpenAlex DOI that
-  did *not* complete is left out of the freshness ledger so it will be retried.
-  (DataCite Events and OpenCitations are unaffected — they have their own
-  pacing.)
-
-To **resume the next day**, re-run the *same* command with `refresh_after`
-set. The freshness filter then skips the DOIs OpenAlex already answered and
-re-queries only the ones left unfinished:
+A reasonable first invocation:
 
 ```python
 from datetime import timedelta
+from pathlib import Path
+from dataset_citation_finder import dois_under_prefix, find_citations
 
-# Re-run daily until the sweep completes. refresh_after skips DOIs queried
-# within the window (the completed ones) and retries the rest.
-summary = find_citations_by_prefix(
-    "10.6073",
+path = Path("edi_dois.txt")
+if not path.exists():
+    path.write_text("\n".join(dois_under_prefix("10.6073", email="you@example.org")))
+
+df = find_citations(
+    path.read_text().split(),
     db_path="edi_citations.sqlite",
-    sources=["datacite_events", "openalex", "opencitations"],
+    refresh_after=timedelta(days=30),
     email="you@example.org",
-    cache_dir="~/.cache/dcf",
-    refresh_after=timedelta(hours=20),
+    api_keys={"openalex": "..."},
 )
+df.to_csv("edi_citations.csv", index=False)
 ```
 
-Without `refresh_after` the re-run still works (unfinished DOIs are always
-retried), but it will needlessly re-query the already-completed ones. Re-fetched
-rows overwrite in place — `source_openalex` upserts are keyed on
-`(cited_doi, citing_doi)` — so resuming never duplicates data.
+To dry-run on a smaller set first, try one EDI scope (see
+`demo/fetch_scope_dois.py`) or the first few hundred DOIs of the list.
+
+## OpenAlex's daily budget and multi-day runs
+
+OpenAlex enforces a **daily request budget** that resets at midnight UTC. A
+large run can use it up, especially without an API key.
+
+- **Set an OpenAlex API key.** The budget with a key is far larger. Pass
+  `api_keys={"openalex": "..."}` or set `OPENALEX_API_KEY`.
+- **When the budget runs out**, the library prints
+  `openalex: OpenAlex daily request budget is used up ...`, stops querying
+  OpenAlex, and lets the other databases finish. OpenAlex's unfinished DOIs
+  are listed in `df.attrs["failed_dois"]["openalex"]` and are not marked as
+  queried.
+
+To continue the next day, re-run the same call. `refresh_after` skips the
+DOIs OpenAlex already answered, so only the unfinished ones are queried.
+Re-fetched citations update in place; resuming never duplicates rows.
+
+## Interrupting a run
+
+Press Ctrl-C at any time. Each database finishes the DOI it is working on
+(usually a few seconds) and then stops. Everything answered so far is
+already saved.

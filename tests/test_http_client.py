@@ -1,118 +1,77 @@
-"""Tests for http_client: RetryPolicy, request_with_retry."""
+"""Tests for http_client.get retries and make_client headers."""
 
 from __future__ import annotations
 
 import httpx
 import pytest
 
-from dataset_citation_finder.http_client import (
-    RetryPolicy,
-    make_client,
-    request_with_retry,
-)
+from dataset_citation_finder.http_client import MAX_ATTEMPTS, get, make_client
 
 
-class TestRetryPolicy:
+def _counting(responses):
+    """Handler returning `responses` in order; records how many were used."""
+    calls = []
 
-    def test_delay_grows_exponentially(self):
-        # With jitter in [0.5x, 1.0x], the second attempt should be strictly
-        # larger than 0.5 * base * 2 and bounded by base * 2.
-        p = RetryPolicy(base_delay=2.0, max_delay=100.0)
-        # Run many iterations to check bounds.
-        for _ in range(20):
-            d1 = p.delay_for(1)  # in [1.0, 2.0]
-            d2 = p.delay_for(2)  # in [2.0, 4.0]
-            assert 1.0 <= d1 <= 2.0
-            assert 2.0 <= d2 <= 4.0
-
-    def test_delay_respects_max(self):
-        p = RetryPolicy(base_delay=1.0, max_delay=5.0)
-        # Large attempt number shouldn't exceed max.
-        d = p.delay_for(20)
-        assert d <= 5.0
+    def handler(request):
+        calls.append(request)
+        r = responses[min(len(calls), len(responses)) - 1]
+        if isinstance(r, Exception):
+            raise r
+        return r
+    return handler, calls
 
 
-class TestRequestWithRetry:
+class TestGet:
 
-    @pytest.mark.asyncio
-    async def test_retries_on_429_then_succeeds(self):
-        call_count = [0]
-
-        def handler(request):
-            call_count[0] += 1
-            if call_count[0] < 3:
-                return httpx.Response(429, headers={"Retry-After": "0"})
-            return httpx.Response(200, json={"ok": True})
-
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
-                                   base_url="http://mocked")
-        policy = RetryPolicy(max_attempts=5, base_delay=0.01, max_delay=0.05)
-        resp = await request_with_retry(client, "GET", "http://mocked/foo", retry=policy)
+    def test_retries_server_error_then_succeeds(self, mock_client):
+        handler, calls = _counting([httpx.Response(503), httpx.Response(200, json={})])
+        resp = get(mock_client(handler), "http://x/")
         assert resp.status_code == 200
-        assert call_count[0] == 3
-        await client.aclose()
+        assert len(calls) == 2
 
-    @pytest.mark.asyncio
-    async def test_gives_up_after_max_attempts(self):
-        call_count = [0]
+    def test_returns_last_response_after_max_attempts(self, mock_client):
+        handler, calls = _counting([httpx.Response(500)])
+        resp = get(mock_client(handler), "http://x/")
+        assert resp.status_code == 500
+        assert len(calls) == MAX_ATTEMPTS
 
-        def handler(request):
-            call_count[0] += 1
-            return httpx.Response(503)
+    def test_does_not_retry_404(self, mock_client):
+        handler, calls = _counting([httpx.Response(404)])
+        assert get(mock_client(handler), "http://x/").status_code == 404
+        assert len(calls) == 1
 
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
-                                   base_url="http://mocked")
-        policy = RetryPolicy(max_attempts=3, base_delay=0.01, max_delay=0.05)
-        resp = await request_with_retry(client, "GET", "http://mocked/foo", retry=policy)
-        # Returns the final (failed) response rather than raising.
-        assert resp.status_code == 503
-        assert call_count[0] == 3
-        await client.aclose()
+    def test_honors_short_retry_after(self, mock_client, no_sleep):
+        handler, _ = _counting([
+            httpx.Response(429, headers={"Retry-After": "7"}),
+            httpx.Response(200),
+        ])
+        get(mock_client(handler), "http://x/")
+        assert no_sleep == [7.0]
 
-    @pytest.mark.asyncio
-    async def test_does_not_retry_on_404(self):
-        call_count = [0]
+    def test_gives_up_on_huge_retry_after(self, mock_client):
+        handler, calls = _counting([httpx.Response(429, headers={"Retry-After": "68400"})])
+        assert get(mock_client(handler), "http://x/").status_code == 429
+        assert len(calls) == 1
 
-        def handler(request):
-            call_count[0] += 1
-            return httpx.Response(404)
+    def test_custom_retry_statuses(self, mock_client):
+        handler, calls = _counting([httpx.Response(429)])
+        get(mock_client(handler), "http://x/", retry_statuses=(500,))
+        assert len(calls) == 1
 
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
-                                   base_url="http://mocked")
-        policy = RetryPolicy(max_attempts=5, base_delay=0.01)
-        resp = await request_with_retry(client, "GET", "http://mocked/foo", retry=policy)
-        assert resp.status_code == 404
-        assert call_count[0] == 1  # No retry on 404.
-        await client.aclose()
+    def test_network_error_retried_then_raised(self, mock_client):
+        handler, calls = _counting([httpx.ConnectError("boom")])
+        with pytest.raises(httpx.ConnectError):
+            get(mock_client(handler), "http://x/")
+        assert len(calls) == MAX_ATTEMPTS
 
 
 class TestMakeClient:
 
-    @pytest.mark.asyncio
-    async def test_includes_email_in_user_agent(self):
-        seen_ua = [None]
+    def test_email_in_user_agent(self):
+        with make_client("me@example.org") as c:
+            assert "mailto:me@example.org" in c.headers["User-Agent"]
 
-        def handler(request):
-            seen_ua[0] = request.headers.get("User-Agent")
-            return httpx.Response(200, json={})
-
-        client = make_client(email="me@example.org")
-        # Swap in mock transport.
-        client._transport = httpx.MockTransport(handler)
-        await client.get("http://example.com/x")
-        assert "mailto:me@example.org" in seen_ua[0]
-        await client.aclose()
-
-    @pytest.mark.asyncio
-    async def test_no_email_still_sets_user_agent(self):
-        seen_ua = [None]
-
-        def handler(request):
-            seen_ua[0] = request.headers.get("User-Agent")
-            return httpx.Response(200, json={})
-
-        client = make_client()
-        client._transport = httpx.MockTransport(handler)
-        await client.get("http://example.com/x")
-        assert "dataset-citation-finder" in seen_ua[0]
-        await client.aclose()
+    def test_user_agent_without_email(self):
+        with make_client() as c:
+            assert c.headers["User-Agent"].startswith("dataset-citation-finder/")
+            assert "mailto" not in c.headers["User-Agent"]

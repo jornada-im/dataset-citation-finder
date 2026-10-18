@@ -1,50 +1,19 @@
-"""Dataset Citation Finder — discover papers citing a dataset across multiple
+"""Dataset Citation Finder — find papers that cite a dataset, using several
 scholarly databases."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
-from .api import (
-    RunSummary,
-    coalesce_citations,
-    collapse_citations_df,
-    describe_store,
-    export_citations,
-    find_citations,
-    find_citations_batch,
-    find_citations_by_prefix,
-    open_store,
-    read_citations,
-    validate_dois,
-)
-from .api_keys import resolve_api_keys
-from .schema import GroupedRecord, LongRow
-from .store import (
-    CURRENT_SCHEMA_VERSION,
-    MigrationRequired,
-    SchemaVersionError,
-    StoreFormatError,
-    StoreInfo,
-)
+from .api import dois_under_prefix, find_citations, read_citations
+from .store import StoreError
+from .utils import normalize_doi
+from .validation import validate_dois
 
 __all__ = [
     "find_citations",
-    "find_citations_batch",
-    "find_citations_by_prefix",
-    "validate_dois",
-    "resolve_api_keys",
-    "coalesce_citations",
-    "collapse_citations_df",
-    "export_citations",
     "read_citations",
-    "open_store",
-    "describe_store",
-    "LongRow",
-    "GroupedRecord",
-    "RunSummary",
-    "StoreInfo",
-    "StoreFormatError",
-    "SchemaVersionError",
-    "MigrationRequired",
-    "CURRENT_SCHEMA_VERSION",
+    "dois_under_prefix",
+    "validate_dois",
+    "normalize_doi",
+    "StoreError",
     "__version__",
 ]

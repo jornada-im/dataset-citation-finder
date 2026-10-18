@@ -1,25 +1,13 @@
-"""Utility functions. The most important one is `normalize_doi`, which is
-called by every adapter at its output boundary so dedup keys work regardless
-of upstream formatting."""
+"""DOI normalization. Every source runs its DOIs through `normalize_doi` so
+results from different databases can be matched on the same key."""
 
 from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote
 
 log = logging.getLogger(__name__)
-
-
-def utcnow() -> datetime:
-    """Current time as a timezone-aware UTC datetime."""
-    return datetime.now(tz=timezone.utc)
-
-
-def utcnow_iso() -> str:
-    """Current UTC time as an ISO 8601 string (the store's timestamp format)."""
-    return utcnow().isoformat()
 
 _DOI_REGEX = re.compile(r"^10\.\d{4,9}/.+$")
 
@@ -63,17 +51,3 @@ def normalize_doi(raw: str | None) -> str | None:
         return None
 
     return s
-
-
-def datacite_next_cursor(body: dict) -> str | None:
-    """Extract the next-page cursor from a DataCite JSON:API response.
-
-    DataCite (both /events and /dois) paginates via a `links.next` URL that
-    embeds `page[cursor]=...`. Returns the cursor value, or None when there is
-    no next page.
-    """
-    next_url = (body.get("links") or {}).get("next")
-    if not next_url:
-        return None
-    cursors = parse_qs(urlparse(next_url).query).get("page[cursor]")
-    return cursors[0] if cursors else None
